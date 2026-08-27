@@ -10,6 +10,7 @@ import numpy as np
 from agents import NormalAgent
 from envs import DummyNavigationEnvironment
 from harness import NavigationHarness, NavigationStack
+from harness.output import RunOutput
 from schemas import NavGoal, NavTask
 
 
@@ -22,7 +23,23 @@ class ScriptedResponses:
         captured = dict(request)
         captured["input"] = list(request["input"])
         self.requests.append(captured)
-        return SimpleNamespace(output=self.outputs.pop(0))
+        output = self.outputs.pop(0)
+        response_id = f"response-{len(self.requests)}"
+        response_record = {
+            "id": response_id,
+            "model": request["model"],
+            "status": "completed",
+            "output": [vars(item) for item in output],
+            "usage": {
+                "input_tokens": 10,
+                "output_tokens": 2,
+                "total_tokens": 12,
+            },
+        }
+        return SimpleNamespace(
+            output=output,
+            model_dump=lambda **_: response_record,
+        )
 
 
 class TransientModelError(Exception):
@@ -383,5 +400,104 @@ def test_normal_agent_stops_when_iteration_budget_is_exhausted() -> None:
         assert result.terminal.status == "failed"
         assert result.terminal.reason == "agent iteration budget reached"
         assert [event.name for event in result.audit] == ["nav.observe", "nav.stop"]
+
+    run(scenario())
+
+
+def test_normal_agent_persists_complete_model_trace_without_inline_images(
+    tmp_path,
+) -> None:
+    class VisualEnvironment(DummyNavigationEnvironment):
+        async def _observe(self, actor, arguments):
+            observation = await super()._observe(actor, arguments)
+            observation["channels"]["rgb"] = np.zeros(
+                (12, 16, 3), dtype=np.uint8
+            )
+            return observation
+
+    async def scenario() -> None:
+        responses = ScriptedResponses(
+            [
+                [function_call("observe", "nav__observe", {})],
+                [
+                    function_call(
+                        "stop",
+                        "nav__stop",
+                        {"status": "completed", "reason": "trace saved"},
+                    )
+                ],
+            ]
+        )
+        agent = NormalAgent(
+            "test-model",
+            ("nav.observe",),
+            client=SimpleNamespace(responses=responses),
+        )
+        goal = NavGoal("goal", "inspect the image")
+        task = NavTask("trace", goal)
+        run_output = RunOutput(
+            {"root": str(tmp_path), "run_id": "trace-run"},
+            resolved_config={},
+            config_sources=(),
+            config_digest="a" * 64,
+            provenance={},
+        )
+        episode = run_output.benchmark(0, "fixture", "test").episode(
+            0, "trace", {"case_id": "trace", "task": task}
+        )
+        result = await NavigationHarness(timeout_s=1).run_task(
+            task,
+            NavigationStack(agent, VisualEnvironment((goal,), targets=(0,))),
+            output=episode,
+        )
+        episode.finish({"terminal": result.terminal})
+
+        component_dir = episode.path / "components"
+        record = json.loads((component_dir / "agent.json").read_text())
+        trace_text = (component_dir / "agent.events.jsonl").read_text()
+        events = [json.loads(line) for line in trace_text.splitlines()]
+
+        assert record["model_trace"] == {
+            "schema_version": 1,
+            "format": "jsonl",
+            "path": "components/agent.events.jsonl",
+        }
+        assert record["model_responses"] == 2
+        assert record["usage"] == {
+            "input_tokens": 20,
+            "output_tokens": 4,
+            "total_tokens": 24,
+        }
+        assert [event["sequence"] for event in events] == list(
+            range(1, len(events) + 1)
+        )
+        assert [event["type"] for event in events] == [
+            "agent.started",
+            "model.request",
+            "model.response",
+            "tool.result",
+            "model.request",
+            "model.response",
+            "tool.result",
+            "agent.terminal",
+        ]
+        responses_in_trace = [
+            event["response"]
+            for event in events
+            if event["type"] == "model.response"
+        ]
+        assert responses_in_trace[0]["id"] == "response-1"
+        assert responses_in_trace[0]["output"][0]["name"] == "nav__observe"
+        observe_result = next(
+            event
+            for event in events
+            if event["type"] == "tool.result"
+            and event["tool_name"] == "nav.observe"
+        )
+        logged_image = observe_result["model_input"]["output"][1]["image_url"]
+        assert logged_image["source"] == "nav.observe.channels.rgb"
+        assert logged_image["media_type"] == "image/jpeg"
+        assert logged_image["encoded_bytes"] > 0
+        assert "data:image" not in trace_text
 
     run(scenario())

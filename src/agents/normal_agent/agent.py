@@ -4,6 +4,7 @@ import asyncio
 import base64
 import io
 import json
+import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -88,6 +89,7 @@ class NormalAgent:
         self._client = client
 
     async def run(self, context: NavContext) -> None:
+        trace_path = "components/agent.events.jsonl"
         context.output.record(
             {
                 "agent": type(self).__name__,
@@ -100,74 +102,179 @@ class NormalAgent:
                 "model_retries": self.model_retries,
                 "retry_backoff_s": self.retry_backoff_s,
                 "required_tools": sorted(self.required_tools),
+                "model_trace": {
+                    "schema_version": 1,
+                    "format": "jsonl",
+                    "path": trace_path,
+                },
             }
         )
         model_tools, tool_names = _responses_tools(context.tools.specs)
-        input_items: list[Any] = [
-            {
-                "role": "user",
-                "content": "Navigate this task:\n" + _json(_task_data(context)),
-            }
-        ]
+        initial_input = {
+            "role": "user",
+            "content": "Navigate this task:\n" + _json(_task_data(context)),
+        }
+        input_items: list[Any] = [initial_input]
+        trace_sequence = 0
+        response_count = 0
+        usage: dict[str, int] = {}
 
-        for _ in range(self.max_iterations):
-            if context.cancelled.is_set():
-                return
-            request: dict[str, Any] = {
-                "model": self.model,
-                "instructions": self.instructions,
-                "input": input_items,
-                "tools": model_tools,
-                "tool_choice": "required",
-                "parallel_tool_calls": self.max_actions_per_turn > 1,
-                "store": False,
-            }
-            if self.reasoning_effort is not None:
-                request["reasoning"] = {"effort": self.reasoning_effort}
-            response = await self._create_response(request)
-            output = list(response.output)
-            input_items.extend(output)
-            calls = [item for item in output if item.type == "function_call"]
-            if not calls:
-                await context.nav.stop(
-                    "failed", "model returned no tool calls"
-                )
-                return
-
-            batch_error = _batch_error(
-                calls, tool_names, maximum=self.max_actions_per_turn
+        def trace(event_type: str, **data: Any) -> None:
+            nonlocal trace_sequence
+            trace_sequence += 1
+            context.output.event(
+                {
+                    "schema_version": 1,
+                    "sequence": trace_sequence,
+                    "time_unix": time.time(),
+                    "type": event_type,
+                    **data,
+                }
             )
-            for call in calls:
-                canonical_name: str | None = tool_names.get(call.name)
-                if batch_error is not None:
-                    tool_output = _error_output("ToolBatchError", batch_error)
-                else:
-                    try:
-                        if canonical_name is None:
-                            raise ValueError(f"unknown model tool: {call.name}")
-                        arguments = json.loads(call.arguments)
-                        if not isinstance(arguments, dict):
-                            raise ValueError("tool arguments must be a JSON object")
-                        arguments = _normalize_tool_arguments(
-                            canonical_name, arguments
-                        )
-                        result = await context.tools.call(canonical_name, arguments)
-                        tool_output = {"ok": True, "result": result}
-                    except Exception as error:
-                        tool_output = _error_output(type(error).__name__, str(error))
 
-                input_items.append(
-                    _function_call_output(
+        trace(
+            "agent.started",
+            execution_id=context.execution_id,
+            model=self.model,
+            instructions=self.instructions,
+            input=initial_input,
+            tools=model_tools,
+        )
+
+        try:
+            for iteration in range(1, self.max_iterations + 1):
+                if context.cancelled.is_set():
+                    trace("agent.cancelled", iteration=iteration)
+                    return
+                request: dict[str, Any] = {
+                    "model": self.model,
+                    "instructions": self.instructions,
+                    "input": input_items,
+                    "tools": model_tools,
+                    "tool_choice": "required",
+                    "parallel_tool_calls": self.max_actions_per_turn > 1,
+                    "store": False,
+                }
+                if self.reasoning_effort is not None:
+                    request["reasoning"] = {"effort": self.reasoning_effort}
+                trace(
+                    "model.request",
+                    iteration=iteration,
+                    input_item_count=len(input_items),
+                    request={
+                        key: _trace_data(value)
+                        for key, value in request.items()
+                        if key != "input"
+                    },
+                )
+                try:
+                    response = await self._create_response(request)
+                except Exception as error:
+                    trace(
+                        "model.error",
+                        iteration=iteration,
+                        error={
+                            "type": type(error).__name__,
+                            "message": str(error),
+                            "status_code": getattr(error, "status_code", None),
+                        },
+                    )
+                    raise
+
+                response_data = _trace_data(response)
+                response_count += 1
+                _accumulate_usage(usage, response_data)
+                trace(
+                    "model.response",
+                    iteration=iteration,
+                    response=response_data,
+                )
+                context.output.record(
+                    {
+                        "model_responses": response_count,
+                        "usage": usage,
+                    }
+                )
+
+                output = list(response.output)
+                input_items.extend(output)
+                calls = [item for item in output if item.type == "function_call"]
+                if not calls:
+                    trace(
+                        "agent.terminal",
+                        iteration=iteration,
+                        status="failed",
+                        reason="model returned no tool calls",
+                    )
+                    await context.nav.stop(
+                        "failed", "model returned no tool calls"
+                    )
+                    return
+
+                batch_error = _batch_error(
+                    calls, tool_names, maximum=self.max_actions_per_turn
+                )
+                for call in calls:
+                    canonical_name: str | None = tool_names.get(call.name)
+                    arguments: Any = call.arguments
+                    if batch_error is not None:
+                        tool_output = _error_output("ToolBatchError", batch_error)
+                    else:
+                        try:
+                            if canonical_name is None:
+                                raise ValueError(f"unknown model tool: {call.name}")
+                            arguments = json.loads(call.arguments)
+                            if not isinstance(arguments, dict):
+                                raise ValueError("tool arguments must be a JSON object")
+                            arguments = _normalize_tool_arguments(
+                                canonical_name, arguments
+                            )
+                            result = await context.tools.call(canonical_name, arguments)
+                            tool_output = {"ok": True, "result": result}
+                        except Exception as error:
+                            tool_output = _error_output(type(error).__name__, str(error))
+
+                    model_input = _function_call_output(
                         call.call_id,
                         canonical_name,
                         tool_output,
                         image_detail=self.observation_image_detail,
                     )
-                )
-                if canonical_name == "nav.stop" and tool_output["ok"]:
-                    return
+                    input_items.append(model_input)
+                    trace(
+                        "tool.result",
+                        iteration=iteration,
+                        call_id=call.call_id,
+                        provider_name=call.name,
+                        tool_name=canonical_name,
+                        arguments=arguments,
+                        output=_trace_data(tool_output),
+                        model_input=_trace_model_input(model_input),
+                    )
+                    if canonical_name == "nav.stop" and tool_output["ok"]:
+                        trace(
+                            "agent.terminal",
+                            iteration=iteration,
+                            status=arguments.get("status", "completed"),
+                            reason=arguments.get("reason", ""),
+                        )
+                        return
 
-        await context.nav.stop("failed", "agent iteration budget reached")
+            trace(
+                "agent.terminal",
+                iteration=self.max_iterations,
+                status="failed",
+                reason="agent iteration budget reached",
+            )
+            await context.nav.stop("failed", "agent iteration budget reached")
+        finally:
+            context.output.record(
+                {
+                    "model_responses": response_count,
+                    "usage": usage,
+                    "trace_events": trace_sequence,
+                }
+            )
 
     def _responses(self) -> Any:
         if self._client is None:
@@ -270,6 +377,71 @@ def _function_call_output(
         "call_id": call_id,
         "output": output,
     }
+
+
+def _trace_model_input(value: Mapping[str, Any]) -> dict[str, Any]:
+    """Keep model-facing feedback while representing inline images compactly."""
+    result = _trace_data(value)
+    output = result.get("output")
+    if not isinstance(output, list):
+        return result
+    for item in output:
+        if not isinstance(item, dict) or item.get("type") != "input_image":
+            continue
+        image_url = item.get("image_url")
+        if not isinstance(image_url, str) or not image_url.startswith("data:"):
+            continue
+        header, _, payload = image_url.partition(",")
+        item["image_url"] = {
+            "source": "nav.observe.channels.rgb",
+            "media_type": header.removeprefix("data:").split(";", 1)[0],
+            "encoded_bytes": len(payload),
+        }
+    return result
+
+
+def _trace_data(value: Any) -> Any:
+    dump = getattr(value, "model_dump", None)
+    if callable(dump):
+        try:
+            return _trace_data(dump(mode="json"))
+        except TypeError:
+            return _trace_data(dump())
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, Mapping):
+        return {str(key): _trace_data(item) for key, item in value.items()}
+    if isinstance(value, Sequence) and not isinstance(
+        value, (str, bytes, bytearray)
+    ):
+        return [_trace_data(item) for item in value]
+    if isinstance(value, bytes):
+        return {"type": "bytes", "size": len(value)}
+    shape = getattr(value, "shape", None)
+    if shape is not None:
+        return _json_default(value)
+    attributes = getattr(value, "__dict__", None)
+    if isinstance(attributes, dict):
+        return {
+            str(key): _trace_data(item)
+            for key, item in attributes.items()
+            if not str(key).startswith("_")
+        }
+    return {"type": type(value).__name__}
+
+
+def _accumulate_usage(total: dict[str, int], response: Any) -> None:
+    if not isinstance(response, Mapping):
+        return
+    usage = response.get("usage")
+    if not isinstance(usage, Mapping):
+        return
+    for name in ("input_tokens", "output_tokens", "total_tokens"):
+        value = usage.get(name)
+        if isinstance(value, int) and not isinstance(value, bool):
+            total[name] = total.get(name, 0) + value
 
 
 def _model_tool_output(
