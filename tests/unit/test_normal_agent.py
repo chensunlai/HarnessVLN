@@ -646,6 +646,10 @@ def test_normal_agent_limits_repeated_object_candidate_calls() -> None:
         assert [event.name for event in result.audit].count("vln.navigate.local") == 3
         instructions = " ".join(responses.requests[0]["instructions"].split())
         assert "appliance framed by cabinet panels" in instructions
+        assert (
+            "continue short calls while each one makes clear pose progress"
+            in instructions
+        )
         rejected = json.loads(responses.requests[8]["input"][-1]["output"])
         assert rejected["error"]["type"] == "AgentToolPolicyError"
         assert "retry limit" in rejected["error"]["message"]

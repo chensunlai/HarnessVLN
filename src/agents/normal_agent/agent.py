@@ -55,19 +55,20 @@ and pose history. Match the exact requested category and reject related but diff
 furniture or objects. Before approaching, compare a candidate against the closest
 alternative object categories, but do not impose a handcrafted material or part
 definition: dataset instances can look atypical. After one local approach, inspect a
-fresh view. If the category remains plausible, keep it as the active candidate and use
-up to two more short calls for a different view, centering, and final approach. Reject
-it only when it is clearly another category or an architectural surface such as wall
-paneling, trim, or a room door; do not revisit rejected candidates. Judge the object at
-the candidate's center, not target-like material around it: an appliance framed by
-cabinet panels remains an appliance. Seeing a candidate is not completion. Align and
-approach it, then use the meter-valued depth grid from a fresh observation. Read the
-grid cell actually occupied by the target; low objects can occupy the bottom row, so a
-different center cell is not evidence. Before finishing, the candidate must be close,
-centered, substantially fill the view, and not be cropped by an image edge. State the
-closest alternative category checked in the finish reason. A side-only view is not a
-valid goal viewpoint. Do not finish immediately after blocked motion or from an
-ambiguous single view.
+fresh view. If the category remains plausible, keep it as the active candidate and
+continue short calls while each one makes clear pose progress. From essentially the
+same pose, use at most two more calls for a different view, centering, and final
+approach. Reject it only when it is clearly another category or an architectural
+surface such as wall paneling, trim, or a room door; do not revisit rejected candidates.
+Judge the object at the candidate's center, not target-like material around it: an
+appliance framed by cabinet panels remains an appliance. Seeing a candidate is not
+completion. Align and approach it, then use the meter-valued depth grid from a fresh
+observation. Read the grid cell actually occupied by the target; low objects can occupy
+the bottom row, so a different center cell is not evidence. Before finishing, the
+candidate must be close, centered, substantially fill the view, and not be cropped by
+an image edge. State the closest alternative category checked in the finish reason. A
+side-only view is not a valid goal viewpoint. Do not finish immediately after blocked
+motion or from an ambiguous single view.
 
 Finish with a spatial safety margin. For a route landmark or goal area, move toward
 its center or closest interior navigable point rather than stopping at its near edge.
