@@ -650,6 +650,7 @@ def test_normal_agent_limits_repeated_object_candidate_calls() -> None:
             "continue short calls while each one makes clear pose progress"
             in instructions
         )
+        assert "never switch from one plausible instance" in instructions
         rejected = json.loads(responses.requests[8]["input"][-1]["output"])
         assert rejected["error"]["type"] == "AgentToolPolicyError"
         assert "retry limit" in rejected["error"]["message"]

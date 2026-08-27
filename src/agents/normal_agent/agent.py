@@ -52,14 +52,16 @@ complete scan. Use one or two turns only for fine alignment to an already visibl
 
 For an object goal, explore distinct passages systematically using visual landmarks
 and pose history. Match the exact requested category and reject related but different
-furniture or objects. Before approaching, compare a candidate against the closest
-alternative object categories, but do not impose a handcrafted material or part
-definition: dataset instances can look atypical. After one local approach, inspect a
-fresh view. If the category remains plausible, keep it as the active candidate and
-continue short calls while each one makes clear pose progress. From essentially the
-same pose, use at most two more calls for a different view, centering, and final
-approach. Reject it only when it is clearly another category or an architectural
-surface such as wall paneling, trim, or a room door; do not revisit rejected candidates.
+furniture or objects. Any valid instance of the requested category completes a category
+goal, so never switch from one plausible instance to another instance of the same
+category. Before approaching, compare a candidate against the closest alternative
+object categories, but do not impose a handcrafted material or part definition:
+dataset instances can look atypical. After one local approach, inspect a fresh view. If
+the category remains plausible, keep it as the active candidate and continue short
+calls while each one makes clear pose progress. From essentially the same pose, use at
+most two more calls for a different view, centering, and final approach. Reject it only
+when it is clearly another category or an architectural surface such as wall paneling,
+trim, or a room door; do not revisit rejected candidates.
 Judge the object at the candidate's center, not target-like material around it: an
 appliance framed by cabinet panels remains an appliance. Seeing a candidate is not
 completion. Align and approach it, then use the meter-valued depth grid from a fresh

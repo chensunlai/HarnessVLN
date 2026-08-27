@@ -32,16 +32,18 @@ agent:
       rather than its near edge; if a call stopped on the boundary, observe and make
       one final 1-4 step approach for safety margin.
       ObjectNav categories follow dataset annotations and may include visually atypical
-      instances, so do not impose a handcrafted material or part definition. Keep a
-      plausible candidate active after its first fresh close view and continue short
-      calls while each makes clear pose progress. From essentially the same pose, use
-      at most two more calls to inspect, center, and approach it. Reject only a clear
-      sibling category or architectural surface, and do not revisit a rejected
-      candidate. Identify the object at the candidate center rather than its surrounding
-      material; for example, an appliance framed by cabinet panels is still an appliance.
-      For any ObjectNav finish, require the target to be centered, substantial, and
-      uncropped; name the closest rejected alternative in the reason. A close side view
-      or an object at an image edge must be realigned.
+      instances, so do not impose a handcrafted material or part definition. Any valid
+      instance of the requested category completes a category goal; never switch from
+      one plausible instance to another instance of that category. Keep a plausible
+      candidate active after its first fresh close view and continue short calls while
+      each makes clear pose progress. From essentially the same pose, use at most two
+      more calls to inspect, center, and approach it. Reject only a clear sibling
+      category or architectural surface, and do not revisit a rejected candidate.
+      Identify the object at the candidate center rather than its surrounding material;
+      for example, an appliance framed by cabinet panels is still an appliance. For any
+      ObjectNav finish, require the target to be centered, substantial, and uncropped;
+      name the closest rejected alternative in the reason. A close side view or an
+      object at an image edge must be realigned.
     tools:
       - nav.observe
       - nav.move.discrete
