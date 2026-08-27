@@ -53,6 +53,7 @@ class HabitatEnvironment:
         forward_m: float = 0.25,
         turn_deg: float = 15.0,
         camera: Mapping[str, Any] | None = None,
+        main_camera_channel: str = "rgb",
         oracle_success_distance: float | None = None,
     ) -> None:
         self.episode = episode
@@ -71,6 +72,14 @@ class HabitatEnvironment:
         provided_channels = set(self.observation_channels) | set(self.static_channels)
         if expose_pose:
             provided_channels.add("pose")
+        if (
+            not isinstance(main_camera_channel, str)
+            or not main_camera_channel
+            or main_camera_channel not in provided_channels
+        ):
+            raise ValueError(
+                "main_camera_channel must name a declared observation channel"
+            )
         self.profile = NavigationProfile(
             observation_channels=frozenset(provided_channels),
             motion=MotionProfile(
@@ -85,6 +94,7 @@ class HabitatEnvironment:
         )
         self._forward_m = float(forward_m)
         self._turn_deg = float(turn_deg)
+        self._main_camera_channel = main_camera_channel
         self._session: Any = None
         self._observation: Mapping[str, Any] = {}
         self._running = False
@@ -115,7 +125,12 @@ class HabitatEnvironment:
         self._running = True
         self._terminal = asyncio.get_running_loop().create_future()
         self._capture_metrics()
-        output.record({"profile": self.profile.as_dict()})
+        output.record(
+            {
+                "profile": self.profile.as_dict(),
+                "main_camera_channel": self._main_camera_channel,
+            }
+        )
         self._record_main_camera("reset")
         return (
             Tool(
@@ -315,17 +330,20 @@ class HabitatEnvironment:
                     )
 
     def _record_main_camera(self, stage: str) -> None:
-        if "rgb" not in self.observation_channels or "rgb" not in self._observation:
+        channel = self._main_camera_channel
+        if channel not in self._observation:
             self._output.unavailable(
-                "main_camera", "Habitat observation has no configured rgb channel"
+                "main_camera",
+                f"Habitat observation has no configured {channel} channel",
             )
             return
         self._output.frame(
             "main_camera",
-            self._observation["rgb"],
+            self._observation[channel],
             {
                 "source_time": time.time(),
                 "stage": stage,
+                "channel": channel,
                 "action_index": self._action_count,
                 "goal_index": self._goal_index,
             },

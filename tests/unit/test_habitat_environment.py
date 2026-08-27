@@ -164,6 +164,7 @@ def test_habitat_environment_owns_main_camera_video_submission(tmp_path) -> None
             value = len(self.actions) * 40
             return {
                 "rgb": np.full((4, 6, 3), value, dtype=np.uint8),
+                "third_rgb": np.full((4, 6, 3), value + 10, dtype=np.uint8),
                 "depth": np.zeros((4, 6), dtype=np.float32),
                 "gps": [1.0, 2.0],
                 "compass": [0.5],
@@ -194,6 +195,8 @@ def test_habitat_environment_owns_main_camera_video_submission(tmp_path) -> None
         environment = HabitatEnvironment(
             fixture.environment_episode,
             native_factory=lambda _: VideoSession(),
+            observation_channels=("rgb", "third_rgb", "depth", "gps", "compass"),
+            main_camera_channel="third_rgb",
         )
 
         result = await NavigationHarness(timeout_s=1).run_task(
@@ -210,6 +213,7 @@ def test_habitat_environment_owns_main_camera_video_submission(tmp_path) -> None
         assert stream["status"] == "saved"
         assert stream["frame_count"] == 2
         assert (run_output.path / stream["path"]).is_file()
+        assert document["main_camera_channel"] == "third_rgb"
         assert document["result"] == result.environment
 
     asyncio.run(scenario())
