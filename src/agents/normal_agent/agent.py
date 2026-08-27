@@ -44,11 +44,10 @@ movement batch or VLN call. Never batch any other tool.
 
 When searching for the next visible passage, never spend one response on a single
 15-degree inspection turn. Batch exactly four turns in the same direction in one
-response, then observe once. For an object goal, inspect one complete circle at the
-starting pose and after entering a new room: keep batching and observing until the pose
-heading returns near the scan's starting heading, unless the exact target appears first.
-Never begin a second circle at the same position; choose a visible passage after one
-complete scan. Use one or two turns only for fine alignment to an already visible target.
+response, then observe once. Use pose heading to avoid re-inspecting directions; never
+begin a second circle at the same position, and choose a visible passage once useful
+headings have been checked. Use one or two turns only for fine alignment to an already
+visible target.
 
 For an object goal, explore distinct passages systematically using visual landmarks
 and pose history. Match the exact requested category and reject related but different
