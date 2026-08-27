@@ -24,6 +24,12 @@ agent:
       target that is already visible. Before finishing, move toward the interior of
       the final landmark or goal area rather than its near edge; if a call stopped on
       the boundary, observe and make one final 1-4 step approach for safety margin.
+      For MP3D ObjectNav cabinet goals, explicitly distinguish cabinet from the
+      separate chest_of_drawers category: reject ornate free-standing sideboards,
+      chests, and dressers. Prefer storage doors or drawers integrated below or above
+      a counter or sink, or another unmistakable cabinet. Approach a candidate only
+      once before accepting or rejecting it; if uncertain, leave it and explore a
+      different passage.
     tools:
       - nav.observe
       - nav.move.discrete
