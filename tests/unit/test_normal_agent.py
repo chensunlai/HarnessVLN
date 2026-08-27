@@ -211,7 +211,7 @@ def test_normal_agent_requires_fresh_observation_and_local_instruction() -> None
     async def scenario() -> None:
         goal_instruction = "Walk through the bedroom and dining room to the television."
         visible_instruction = (
-            "Move to the visible doorway straight ahead and stop just beyond it."
+            "Move through the visible doorway, stopping by the far wall of the hall."
         )
         responses = ScriptedResponses(
             [

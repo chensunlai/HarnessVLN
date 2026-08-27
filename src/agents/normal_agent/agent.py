@@ -53,6 +53,12 @@ by the target should normally be within about 1 meter, and the target should occ
 substantial part of that cell. A nearby wall or floor in another cell is not evidence.
 Do not finish immediately after blocked motion or from an ambiguous single view.
 
+Finish with a spatial safety margin. For a route landmark or goal area, move toward
+its center or closest interior navigable point rather than stopping at its near edge.
+If the last local call stopped on a boundary, observe and make one final 1-4 step
+approach before nav.goal.finish. For an object goal, keep the exact target clearly in
+view during this final approach and do not pass it.
+
 Use observation position and heading as a compact route ledger. Do not issue the same
 local target again from a nearby pose, revisit a completed room transition, or perform
 repeated full scans at one junction. If progress returns near an earlier pose, choose
@@ -546,7 +552,7 @@ def _validate_local_instruction(
         )
     if len(re.findall(r"[.!?]+", instruction.strip())) > 1:
         raise AgentToolPolicyError("local VLN instruction must be one sentence")
-    if re.search(r"\bstop\b", normalized) is None:
+    if re.search(r"\b(?:stop|stopping)\b", normalized) is None:
         raise AgentToolPolicyError(
             "local VLN instruction must state where to stop at the visible target"
         )

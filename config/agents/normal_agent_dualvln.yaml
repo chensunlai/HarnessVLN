@@ -21,7 +21,9 @@ agent:
       revisiting completed transitions, and re-observe after every local attempt.
       When searching for the next passage, batch four same-direction turn actions in
       one response before observing; use single turns only for fine alignment to a
-      target that is already visible.
+      target that is already visible. Before finishing, move toward the interior of
+      the final landmark or goal area rather than its near edge; if a call stopped on
+      the boundary, observe and make one final 1-4 step approach for safety margin.
     tools:
       - nav.observe
       - nav.move.discrete
