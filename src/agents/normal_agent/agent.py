@@ -86,6 +86,7 @@ turn with plain text."""
 REASONING_EFFORTS = frozenset(
     {"none", "minimal", "low", "medium", "high", "xhigh"}
 )
+OBJECT_CANDIDATE_ATTEMPT_LIMIT = 3
 
 
 class AgentToolPolicyError(ValueError):
@@ -188,6 +189,9 @@ class NormalAgent:
                 "observation_image_channel": self.observation_image_channel,
                 "observation_depth_channel": self.observation_depth_channel,
                 "max_navigation_actions": self.max_navigation_actions,
+                "object_candidate_policy": {
+                    "consecutive_attempt_limit": OBJECT_CANDIDATE_ATTEMPT_LIMIT,
+                },
                 "model_retries": self.model_retries,
                 "retry_backoff_s": self.retry_backoff_s,
                 "required_tools": sorted(self.required_tools),
@@ -218,6 +222,10 @@ class NormalAgent:
         fresh_observation = False
         navigation_actions = 0
         final_goal_accepted = False
+        object_candidate_attempts = 0
+        object_category = _object_category(
+            context.task.goal.modality, context.task.goal.public
+        )
         require_observation = "nav.observe" in self.required_tools
         require_goal_finish = "nav.goal.finish" in self.required_tools
         local_step_cap = _local_step_cap(context.tools.specs)
@@ -338,6 +346,7 @@ class NormalAgent:
                     canonical_name: str | None = tool_names.get(call.name)
                     arguments: Any = call.arguments
                     compact_images = False
+                    local_is_object_candidate = False
                     if batch_error is not None:
                         tool_output = _error_output("ToolBatchError", batch_error)
                     elif skip_remaining_moves is not None:
@@ -365,6 +374,16 @@ class NormalAgent:
                                     arguments,
                                     task_instructions,
                                     maximum=local_step_cap,
+                                )
+                                local_is_object_candidate = (
+                                    _mentions_object_category(
+                                        arguments["instruction"], object_category
+                                    )
+                                )
+                                _validate_object_candidate_repetition(
+                                    arguments["instruction"],
+                                    category=object_category,
+                                    attempts=object_candidate_attempts,
                                 )
                                 if (
                                     navigation_actions + requested_steps
@@ -416,6 +435,11 @@ class NormalAgent:
                                 navigation_actions += _navigation_steps(
                                     result, requested_steps
                                 )
+                                object_candidate_attempts = (
+                                    object_candidate_attempts + 1
+                                    if local_is_object_candidate
+                                    else 0
+                                )
                             elif canonical_name == "nav.goal.finish":
                                 fresh_observation = False
                                 compact_images = True
@@ -431,6 +455,11 @@ class NormalAgent:
                                 )
                                 if isinstance(next_goal, Mapping):
                                     final_goal_accepted = False
+                                    object_candidate_attempts = 0
+                                    object_category = _object_category(
+                                        next_goal.get("modality"),
+                                        next_goal.get("public"),
+                                    )
                                     task_instructions.add(
                                         _instruction_key(next_goal.get("instruction"))
                                     )
@@ -626,6 +655,41 @@ def _move_batch_stop_reason(result: Any) -> str | None:
             "movement was blocked; remaining moves skipped, observe before replanning"
         )
     return None
+
+
+def _object_category(modality: Any, public: Any) -> str | None:
+    if modality != "object" or not isinstance(public, Mapping):
+        return None
+    category = public.get("category")
+    if not isinstance(category, str) or not category.strip():
+        return None
+    return " ".join(category.replace("_", " ").split()).casefold()
+
+
+def _mentions_object_category(instruction: str, category: str | None) -> bool:
+    if category is None:
+        return False
+    normalized = _instruction_key(instruction.replace("_", " "))
+    return all(
+        re.search(rf"\b{re.escape(term)}s?\b", normalized) is not None
+        for term in category.split()
+    )
+
+
+def _validate_object_candidate_repetition(
+    instruction: str,
+    *,
+    category: str | None,
+    attempts: int,
+) -> None:
+    if not _mentions_object_category(instruction, category):
+        return
+    if attempts >= OBJECT_CANDIDATE_ATTEMPT_LIMIT:
+        raise AgentToolPolicyError(
+            "consecutive object candidate retry limit reached; use the fresh "
+            "observation to finish the verified candidate or choose a different "
+            "visible passage"
+        )
 
 
 def _compact_observation_images(items: Sequence[Any]) -> list[Any]:

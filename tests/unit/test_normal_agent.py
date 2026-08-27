@@ -594,6 +594,63 @@ def test_normal_agent_navigation_budget_rejects_batch_before_execution() -> None
     run(scenario())
 
 
+def test_normal_agent_limits_repeated_object_candidate_calls() -> None:
+    async def scenario() -> None:
+        outputs: list[list[Any]] = []
+        for index in range(4):
+            outputs.extend(
+                [
+                    [function_call(f"observe-{index}", "nav__observe", {})],
+                    [
+                        function_call(
+                            f"candidate-{index}",
+                            "vln__navigate__local",
+                            {
+                                "instruction": (
+                                    f"Approach the visible cabinet number {index} and "
+                                    "stop in front of it."
+                                ),
+                                "max_steps": 4,
+                            },
+                        )
+                    ],
+                ]
+            )
+        outputs.append(
+            [
+                function_call(
+                    "stop",
+                    "nav__stop",
+                    {"status": "failed", "reason": "retry guard checked"},
+                )
+            ]
+        )
+        responses = ScriptedResponses(outputs)
+        goal = NavGoal(
+            "goal", "Find the cabinet.", "object", {"category": "cabinet"}
+        )
+        result = await NavigationHarness(timeout_s=1).run_task(
+            NavTask("candidate-retries", goal),
+            NavigationStack(
+                NormalAgent(
+                    "test-model",
+                    ("nav.observe", "vln.navigate.local"),
+                    client=SimpleNamespace(responses=responses),
+                ),
+                DummyNavigationEnvironment((goal,), targets=(0,)),
+                vln=DummyVLNNavigator(),
+            ),
+        )
+
+        assert result.terminal.status == "failed"
+        assert [event.name for event in result.audit].count("vln.navigate.local") == 3
+        rejected = json.loads(responses.requests[8]["input"][-1]["output"])
+        assert rejected["error"]["type"] == "AgentToolPolicyError"
+        assert "retry limit" in rejected["error"]["message"]
+
+    run(scenario())
+
+
 def test_normal_agent_reports_remaining_navigation_budget() -> None:
     async def scenario() -> None:
         responses = ScriptedResponses(
