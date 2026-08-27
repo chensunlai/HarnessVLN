@@ -32,9 +32,12 @@ agent:
       instances, so do not impose a handcrafted material or part definition. Keep a
       plausible candidate active after its first fresh close view and use at most two
       more short calls to inspect, center, and approach it. Reject only a clear sibling
-      category or architectural surface, and do not revisit a rejected candidate. For
-      any ObjectNav finish, require the target to be centered, substantial, and
-      uncropped; a close side view or an object at an image edge must be realigned.
+      category or architectural surface, and do not revisit a rejected candidate.
+      Identify the object at the candidate center rather than its surrounding material;
+      for example, an appliance framed by cabinet panels is still an appliance. For any
+      ObjectNav finish, require the target to be centered, substantial, and uncropped;
+      name the closest rejected alternative in the reason. A close side view or an
+      object at an image edge must be realigned.
     tools:
       - nav.observe
       - nav.move.discrete

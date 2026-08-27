@@ -644,6 +644,8 @@ def test_normal_agent_limits_repeated_object_candidate_calls() -> None:
 
         assert result.terminal.status == "failed"
         assert [event.name for event in result.audit].count("vln.navigate.local") == 3
+        instructions = " ".join(responses.requests[0]["instructions"].split())
+        assert "appliance framed by cabinet panels" in instructions
         rejected = json.loads(responses.requests[8]["input"][-1]["output"])
         assert rejected["error"]["type"] == "AgentToolPolicyError"
         assert "retry limit" in rejected["error"]["message"]
@@ -702,64 +704,6 @@ def test_normal_agent_resets_object_candidate_limit_after_position_progress() ->
         assert result.terminal.status == "failed"
         assert [event.name for event in result.audit].count("vln.navigate.local") == 4
         assert result.environment["position"] == 4
-
-    run(scenario())
-
-
-def test_normal_agent_rejects_distant_object_finish() -> None:
-    class DistantObjectEnvironment(DummyNavigationEnvironment):
-        async def _observe(self, actor, arguments):
-            observation = await super()._observe(actor, arguments)
-            observation["channels"]["depth"] = np.full(
-                (8, 8, 1), 0.5, dtype=np.float32
-            )
-            observation["channels"]["depth_metadata"] = {
-                "encoding": "linear_normalized",
-                "minimum_m": 0.5,
-                "maximum_m": 4.5,
-            }
-            return observation
-
-    async def scenario() -> None:
-        responses = ScriptedResponses(
-            [
-                [function_call("observe", "nav__observe", {})],
-                [
-                    function_call(
-                        "finish",
-                        "nav__goal__finish",
-                        {"status": "completed", "reason": "candidate visible"},
-                    )
-                ],
-                [
-                    function_call(
-                        "stop",
-                        "nav__stop",
-                        {"status": "failed", "reason": "depth gate checked"},
-                    )
-                ],
-            ]
-        )
-        goal = NavGoal(
-            "goal", "Find the cabinet.", "object", {"category": "cabinet"}
-        )
-        result = await NavigationHarness(timeout_s=1).run_task(
-            NavTask("object-depth-gate", goal),
-            NavigationStack(
-                NormalAgent(
-                    "test-model",
-                    ("nav.observe", "nav.goal.finish"),
-                    client=SimpleNamespace(responses=responses),
-                ),
-                DistantObjectEnvironment((goal,), targets=(0,)),
-            ),
-        )
-
-        assert result.terminal.status == "failed"
-        assert [event.name for event in result.audit].count("nav.goal.finish") == 0
-        rejected = json.loads(responses.requests[2]["input"][-1]["output"])
-        assert rejected["error"]["type"] == "AgentToolPolicyError"
-        assert "2.50 meters" in rejected["error"]["message"]
 
     run(scenario())
 

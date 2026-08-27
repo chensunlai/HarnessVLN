@@ -55,14 +55,16 @@ definition: dataset instances can look atypical. After one local approach, inspe
 fresh view. If the category remains plausible, keep it as the active candidate and use
 up to two more short calls for a different view, centering, and final approach. Reject
 it only when it is clearly another category or an architectural surface such as wall
-paneling, trim, or a room door; do not revisit rejected candidates. Seeing a candidate
-is not completion. Align and approach it, then
-use the meter-valued depth grid from a fresh observation: the grid cell occupied by the
-target should normally be within about 1 meter, and the target should occupy a
-substantial part of that cell. A nearby wall or floor in another cell is not evidence.
-Before finishing, the candidate must be centered, substantially fill the view, and not
-be cropped by an image edge. A side-only view is not a valid goal viewpoint. Do not
-finish immediately after blocked motion or from an ambiguous single view.
+paneling, trim, or a room door; do not revisit rejected candidates. Judge the object at
+the candidate's center, not target-like material around it: an appliance framed by
+cabinet panels remains an appliance. Seeing a candidate is not completion. Align and
+approach it, then use the meter-valued depth grid from a fresh observation. Read the
+grid cell actually occupied by the target; low objects can occupy the bottom row, so a
+different center cell is not evidence. Before finishing, the candidate must be close,
+centered, substantially fill the view, and not be cropped by an image edge. State the
+closest alternative category checked in the finish reason. A side-only view is not a
+valid goal viewpoint. Do not finish immediately after blocked motion or from an
+ambiguous single view.
 
 Finish with a spatial safety margin. For a route landmark or goal area, move toward
 its center or closest interior navigable point rather than stopping at its near edge.
@@ -88,7 +90,6 @@ REASONING_EFFORTS = frozenset(
 )
 OBJECT_CANDIDATE_ATTEMPT_LIMIT = 3
 OBJECT_CANDIDATE_RESET_DISTANCE_M = 0.5
-OBJECT_FINISH_MAX_CENTER_DEPTH_M = 1.25
 
 
 class AgentToolPolicyError(ValueError):
@@ -194,7 +195,6 @@ class NormalAgent:
                 "object_candidate_policy": {
                     "consecutive_attempt_limit": OBJECT_CANDIDATE_ATTEMPT_LIMIT,
                     "reset_distance_m": OBJECT_CANDIDATE_RESET_DISTANCE_M,
-                    "finish_max_center_depth_m": OBJECT_FINISH_MAX_CENTER_DEPTH_M,
                 },
                 "model_retries": self.model_retries,
                 "retry_backoff_s": self.retry_backoff_s,
@@ -229,7 +229,6 @@ class NormalAgent:
         object_candidate_attempts = 0
         object_candidate_position: tuple[str, float, float, float] | None = None
         latest_position: tuple[str, float, float, float] | None = None
-        latest_center_depth_m: float | None = None
         object_category = _object_category(
             context.task.goal.modality, context.task.goal.public
         )
@@ -423,18 +422,6 @@ class NormalAgent:
                                         "nav.goal.finish requires a fresh nav.observe "
                                         "after the most recent movement or VLN call"
                                     )
-                                if (
-                                    arguments.get("status") == "completed"
-                                    and object_category is not None
-                                    and latest_center_depth_m is not None
-                                    and latest_center_depth_m
-                                    > OBJECT_FINISH_MAX_CENTER_DEPTH_M
-                                ):
-                                    raise AgentToolPolicyError(
-                                        "object goal finish requires a centered target "
-                                        "within 1.25 meters; latest center depth is "
-                                        f"{latest_center_depth_m:.2f} meters"
-                                    )
                             elif canonical_name == "nav.stop":
                                 if (
                                     arguments.get("status") == "completed"
@@ -450,10 +437,6 @@ class NormalAgent:
                                 fresh_observation = True
                                 compact_images = True
                                 latest_position = _observation_position(result)
-                                latest_center_depth_m = _center_depth_m(
-                                    result,
-                                    preferred=self.observation_depth_channel,
-                                )
                             elif canonical_name == "nav.move.discrete":
                                 fresh_observation = False
                                 navigation_actions += 1
@@ -489,7 +472,6 @@ class NormalAgent:
                                     object_candidate_attempts = 0
                                     object_candidate_position = None
                                     latest_position = None
-                                    latest_center_depth_m = None
                                     object_category = _object_category(
                                         next_goal.get("modality"),
                                         next_goal.get("public"),
@@ -761,25 +743,6 @@ def _positions_separated(
         (current[index] - previous[index]) ** 2 for index in range(1, 4)
     )
     return squared_distance >= minimum_m**2
-
-
-def _center_depth_m(observation: Any, *, preferred: str) -> float | None:
-    channels = (
-        observation.get("channels") if isinstance(observation, Mapping) else None
-    )
-    if not isinstance(channels, Mapping):
-        return None
-    for channel in dict.fromkeys((preferred, "depth")):
-        if not _is_depth_image(channels.get(channel)):
-            continue
-        summary = _depth_summary(
-            channels[channel], channels.get("depth_metadata")
-        )
-        meters = summary.get("meters") if isinstance(summary, Mapping) else None
-        center = meters.get("center") if isinstance(meters, Mapping) else None
-        if isinstance(center, (int, float)) and not isinstance(center, bool):
-            return float(center)
-    return None
 
 
 def _compact_observation_images(items: Sequence[Any]) -> list[Any]:
