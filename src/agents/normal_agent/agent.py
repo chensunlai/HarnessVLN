@@ -44,8 +44,11 @@ movement batch or VLN call. Never batch any other tool.
 
 When searching for the next visible passage, never spend one response on a single
 15-degree inspection turn. Batch exactly four turns in the same direction in one
-response, then observe once. Use one or two turns only for fine alignment to an already
-visible target.
+response, then observe once. For an object goal, inspect one complete circle at the
+starting pose and after entering a new room: keep batching and observing until the pose
+heading returns near the scan's starting heading, unless the exact target appears first.
+Never begin a second circle at the same position; choose a visible passage after one
+complete scan. Use one or two turns only for fine alignment to an already visible target.
 
 For an object goal, explore distinct passages systematically using visual landmarks
 and pose history. Match the exact requested category and reject related but different
@@ -91,6 +94,8 @@ REASONING_EFFORTS = frozenset(
 OBJECT_CANDIDATE_ATTEMPT_LIMIT = 3
 OBJECT_CANDIDATE_RESET_DISTANCE_M = 0.5
 OBJECT_LOCAL_STEP_LIMIT = 8
+STATIONARY_SCAN_RESET_DISTANCE_M = 0.2
+STATIONARY_TURN_ACTION_LIMIT = 24
 
 
 class AgentToolPolicyError(ValueError):
@@ -202,6 +207,7 @@ class NormalAgent:
                 "observation_image_channel": self.observation_image_channel,
                 "observation_depth_channel": self.observation_depth_channel,
                 "max_navigation_actions": self.max_navigation_actions,
+                "stationary_turn_action_limit": STATIONARY_TURN_ACTION_LIMIT,
                 "object_candidate_policy": {
                     "consecutive_attempt_limit": OBJECT_CANDIDATE_ATTEMPT_LIMIT,
                     "local_step_limit": OBJECT_LOCAL_STEP_LIMIT,
@@ -240,6 +246,8 @@ class NormalAgent:
         object_candidate_attempts = 0
         object_candidate_position: tuple[str, float, float, float] | None = None
         latest_position: tuple[str, float, float, float] | None = None
+        stationary_turn_actions = 0
+        stationary_turn_position: tuple[str, float, float, float] | None = None
         require_observation = "nav.observe" in self.required_tools
         require_goal_finish = "nav.goal.finish" in self.required_tools
         task_instructions = {_instruction_key(context.task.instruction)}
@@ -376,6 +384,18 @@ class NormalAgent:
                             arguments = _normalize_tool_arguments(
                                 canonical_name, arguments
                             )
+                            if canonical_name == "nav.move.discrete":
+                                action = arguments.get("action")
+                                if (
+                                    action in {"turn_left", "turn_right"}
+                                    and stationary_turn_actions
+                                    >= STATIONARY_TURN_ACTION_LIMIT
+                                ):
+                                    raise AgentToolPolicyError(
+                                        "stationary scan limit reached; move toward a "
+                                        "visible passage before scanning this position "
+                                        "again"
+                                    )
                             if canonical_name == "vln.navigate.local":
                                 if not fresh_observation:
                                     raise AgentToolPolicyError(
@@ -444,11 +464,26 @@ class NormalAgent:
                                 fresh_observation = True
                                 compact_images = True
                                 latest_position = _observation_position(result)
+                                if _positions_separated(
+                                    latest_position,
+                                    stationary_turn_position,
+                                    minimum_m=STATIONARY_SCAN_RESET_DISTANCE_M,
+                                ):
+                                    stationary_turn_actions = 0
+                                    stationary_turn_position = None
                             elif canonical_name == "nav.move.discrete":
                                 fresh_observation = False
                                 navigation_actions += 1
                                 compact_images = True
                                 stop_reason = _move_batch_stop_reason(result)
+                                action = arguments.get("action")
+                                if action in {"turn_left", "turn_right"}:
+                                    stationary_turn_actions += 1
+                                    if stationary_turn_position is None:
+                                        stationary_turn_position = latest_position
+                                elif action != "stand_still" and stop_reason is None:
+                                    stationary_turn_actions = 0
+                                    stationary_turn_position = None
                                 if stop_reason is not None:
                                     skip_remaining_moves = stop_reason
                             elif canonical_name == "vln.navigate.local":
@@ -461,6 +496,8 @@ class NormalAgent:
                                 else:
                                     object_candidate_attempts = 0
                                     object_candidate_position = None
+                                stationary_turn_actions = 0
+                                stationary_turn_position = None
                             elif canonical_name == "nav.goal.finish":
                                 fresh_observation = False
                                 compact_images = True
@@ -479,6 +516,8 @@ class NormalAgent:
                                     object_candidate_attempts = 0
                                     object_candidate_position = None
                                     latest_position = None
+                                    stationary_turn_actions = 0
+                                    stationary_turn_position = None
                                     object_category = _object_category(
                                         next_goal.get("modality"),
                                         next_goal.get("public"),

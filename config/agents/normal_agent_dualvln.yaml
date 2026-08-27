@@ -24,10 +24,13 @@ agent:
       clauses in order, use pose and heading to avoid revisiting completed transitions,
       and re-observe after every local attempt.
       When searching for the next passage, batch four same-direction turn actions in
-      one response before observing; use single turns only for fine alignment to a
-      target that is already visible. Before finishing, move toward the interior of
-      the final landmark or goal area rather than its near edge; if a call stopped on
-      the boundary, observe and make one final 1-4 step approach for safety margin.
+      one response before observing. For object search, inspect one complete circle at
+      the starting pose and in each newly entered room, using yaw to stop when the
+      heading returns near its starting value; never repeat a circle at the same pose.
+      Use single turns only for fine alignment to a target that is already visible.
+      Before finishing, move toward the interior of the final landmark or goal area
+      rather than its near edge; if a call stopped on the boundary, observe and make
+      one final 1-4 step approach for safety margin.
       ObjectNav categories follow dataset annotations and may include visually atypical
       instances, so do not impose a handcrafted material or part definition. Keep a
       plausible candidate active after its first fresh close view and use at most two

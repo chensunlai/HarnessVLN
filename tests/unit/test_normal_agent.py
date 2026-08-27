@@ -804,6 +804,57 @@ def test_normal_agent_limits_object_local_navigation_to_eight_steps() -> None:
     run(scenario())
 
 
+def test_normal_agent_limits_repeated_turns_at_one_position() -> None:
+    async def scenario() -> None:
+        outputs: list[list[Any]] = []
+        for batch in range(7):
+            outputs.append([function_call(f"observe-{batch}", "nav__observe", {})])
+            outputs.append(
+                [
+                    function_call(
+                        f"turn-{batch}-{index}",
+                        "nav__move__discrete",
+                        {"action": "turn_left"},
+                    )
+                    for index in range(4)
+                ]
+            )
+        outputs.append(
+            [
+                function_call(
+                    "stop",
+                    "nav__stop",
+                    {"status": "failed", "reason": "scan guard checked"},
+                )
+            ]
+        )
+        responses = ScriptedResponses(outputs)
+        goal = NavGoal("goal", "inspect the room")
+        result = await NavigationHarness(timeout_s=1).run_task(
+            NavTask("stationary-scan-limit", goal),
+            NavigationStack(
+                NormalAgent(
+                    "test-model",
+                    ("nav.observe", "nav.move.discrete"),
+                    client=SimpleNamespace(responses=responses),
+                ),
+                DummyNavigationEnvironment((goal,), targets=(0,)),
+            ),
+        )
+
+        assert result.terminal.status == "failed"
+        assert [event.name for event in result.audit].count("nav.move.discrete") == 24
+        rejected = responses.requests[-1]["input"][-4:]
+        assert all(
+            "stationary scan limit" in json.loads(item["output"])["error"][
+                "message"
+            ]
+            for item in rejected
+        )
+
+    run(scenario())
+
+
 def test_normal_agent_reports_remaining_navigation_budget() -> None:
     async def scenario() -> None:
         responses = ScriptedResponses(
