@@ -591,6 +591,43 @@ def test_normal_agent_navigation_budget_rejects_batch_before_execution() -> None
     run(scenario())
 
 
+def test_normal_agent_reports_remaining_navigation_budget() -> None:
+    async def scenario() -> None:
+        responses = ScriptedResponses(
+            [
+                [function_call("observe", "nav__observe", {})],
+                [
+                    function_call(
+                        "move", "nav__move__discrete", {"action": "forward"}
+                    )
+                ],
+                [
+                    function_call(
+                        "stop", "nav__stop", {"status": "completed", "reason": "done"}
+                    )
+                ],
+            ]
+        )
+        goal = NavGoal("goal", "move once")
+        await NavigationHarness(timeout_s=1).run_task(
+            NavTask("budget-report", goal),
+            NavigationStack(
+                NormalAgent(
+                    "test-model",
+                    ("nav.observe", "nav.move.discrete"),
+                    max_navigation_actions=3,
+                    client=SimpleNamespace(responses=responses),
+                ),
+                DummyNavigationEnvironment((goal,), targets=(1,)),
+            ),
+        )
+
+        move_output = json.loads(responses.requests[2]["input"][-1]["output"])
+        assert move_output["navigation_budget"] == {"used": 1, "remaining": 2}
+
+    run(scenario())
+
+
 def test_normal_agent_stops_move_batch_after_blocked_motion() -> None:
     class BlockingEnvironment(DummyNavigationEnvironment):
         async def _move(self, actor, arguments):

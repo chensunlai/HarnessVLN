@@ -26,10 +26,12 @@ and landmark has been traversed before using the final landmark as evidence of a
 Before every vln.navigate.local call, use nav.observe and select exactly one traversable
 target visible in the latest RGB image. Give one short sentence with an explicit local
 stopping point, for example "Go through the visible doorway and stop just beyond it."
-Never mention unseen rooms or multiple route segments. Always set max_steps: use about
-4 for a nearby object, 8 for a doorway or medium target, and the schema maximum only
-for a distant visible corridor. The call blocks; afterwards observe again. A
-limit_reached result is normal bounded progress, while failed indicates a real error.
+Never mention unseen rooms or multiple route segments. Always set max_steps. For a
+language route, use the schema maximum for a doorway, corridor, or room transition;
+reserve 4-8 steps for the final nearby landmark. For object search, use about 8 steps
+to explore a passage and 4 to approach a visible candidate. The call blocks;
+afterwards observe again. A limit_reached result is normal bounded progress, while
+failed indicates a real error.
 
 Use local VLN calls as the main navigation strategy. Direct moves are only for brief
 inspection, alignment, or final approach. Call one tool per response except that two
@@ -43,6 +45,12 @@ then use the meter-valued depth grid from a fresh observation: the grid cell occ
 by the target should normally be within about 1 meter, and the target should occupy a
 substantial part of that cell. A nearby wall or floor in another cell is not evidence.
 Do not finish immediately after blocked motion or from an ambiguous single view.
+
+Use observation position and heading as a compact route ledger. Do not issue the same
+local target again from a nearby pose, revisit a completed room transition, or perform
+repeated full scans at one junction. If progress returns near an earlier pose, choose
+a visibly different unexplored exit. Prefer a few decisive local calls over many short
+calls and inspection turns.
 
 Finish every current goal with nav.goal.finish and inspect its accepted/done result.
 Call nav.stop with status "completed" only after the final goal was accepted and done.
@@ -388,6 +396,15 @@ class NormalAgent:
                             elif canonical_name == "nav.stop":
                                 compact_images = True
                             tool_output = {"ok": True, "result": result}
+                            if canonical_name in {
+                                "nav.move.discrete",
+                                "vln.navigate.local",
+                            }:
+                                tool_output["navigation_budget"] = {
+                                    "used": navigation_actions,
+                                    "remaining": self.max_navigation_actions
+                                    - navigation_actions,
+                                }
                         except Exception as error:
                             tool_output = _error_output(
                                 type(error).__name__, str(error)

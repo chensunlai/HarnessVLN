@@ -12,9 +12,12 @@ agent:
     guidance: >-
       Use DualVLN only through blocking vln.navigate.local calls. First observe,
       then describe one target that is currently visible, such as an open doorway,
-      corridor segment, or object, with an explicit stopping point. Set max_steps
-      to 4 for a nearby object, 8 for a doorway, or 16 for a distant corridor.
-      Follow route clauses in order and re-observe after every local attempt.
+      corridor segment, or object, with an explicit stopping point. For a language
+      route, set max_steps to 16 for every doorway, corridor, or room transition,
+      and use 4-8 only for its final nearby landmark. For object search, use 8 to
+      explore a passage and 4 to approach a visible candidate. Follow route clauses
+      in order, use pose and heading to avoid revisiting completed transitions, and
+      re-observe after every local attempt.
     tools:
       - nav.observe
       - nav.move.discrete
