@@ -87,6 +87,7 @@ REASONING_EFFORTS = frozenset(
     {"none", "minimal", "low", "medium", "high", "xhigh"}
 )
 OBJECT_CANDIDATE_ATTEMPT_LIMIT = 3
+OBJECT_CANDIDATE_RESET_DISTANCE_M = 0.5
 OBJECT_FINISH_MAX_CENTER_DEPTH_M = 1.25
 
 
@@ -192,6 +193,7 @@ class NormalAgent:
                 "max_navigation_actions": self.max_navigation_actions,
                 "object_candidate_policy": {
                     "consecutive_attempt_limit": OBJECT_CANDIDATE_ATTEMPT_LIMIT,
+                    "reset_distance_m": OBJECT_CANDIDATE_RESET_DISTANCE_M,
                     "finish_max_center_depth_m": OBJECT_FINISH_MAX_CENTER_DEPTH_M,
                 },
                 "model_retries": self.model_retries,
@@ -225,6 +227,8 @@ class NormalAgent:
         navigation_actions = 0
         final_goal_accepted = False
         object_candidate_attempts = 0
+        object_candidate_position: tuple[str, float, float, float] | None = None
+        latest_position: tuple[str, float, float, float] | None = None
         latest_center_depth_m: float | None = None
         object_category = _object_category(
             context.task.goal.modality, context.task.goal.public
@@ -383,6 +387,12 @@ class NormalAgent:
                                         arguments["instruction"], object_category
                                     )
                                 )
+                                if local_is_object_candidate and _positions_separated(
+                                    latest_position,
+                                    object_candidate_position,
+                                    minimum_m=OBJECT_CANDIDATE_RESET_DISTANCE_M,
+                                ):
+                                    object_candidate_attempts = 0
                                 _validate_object_candidate_repetition(
                                     arguments["instruction"],
                                     category=object_category,
@@ -439,6 +449,7 @@ class NormalAgent:
                             if canonical_name == "nav.observe":
                                 fresh_observation = True
                                 compact_images = True
+                                latest_position = _observation_position(result)
                                 latest_center_depth_m = _center_depth_m(
                                     result,
                                     preferred=self.observation_depth_channel,
@@ -454,11 +465,12 @@ class NormalAgent:
                                 navigation_actions += _navigation_steps(
                                     result, requested_steps
                                 )
-                                object_candidate_attempts = (
-                                    object_candidate_attempts + 1
-                                    if local_is_object_candidate
-                                    else 0
-                                )
+                                if local_is_object_candidate:
+                                    object_candidate_attempts += 1
+                                    object_candidate_position = latest_position
+                                else:
+                                    object_candidate_attempts = 0
+                                    object_candidate_position = None
                             elif canonical_name == "nav.goal.finish":
                                 fresh_observation = False
                                 compact_images = True
@@ -475,6 +487,8 @@ class NormalAgent:
                                 if isinstance(next_goal, Mapping):
                                     final_goal_accepted = False
                                     object_candidate_attempts = 0
+                                    object_candidate_position = None
+                                    latest_position = None
                                     latest_center_depth_m = None
                                     object_category = _object_category(
                                         next_goal.get("modality"),
@@ -710,6 +724,43 @@ def _validate_object_candidate_repetition(
             "observation to finish the verified candidate or choose a different "
             "visible passage"
         )
+
+
+def _observation_position(
+    observation: Any,
+) -> tuple[str, float, float, float] | None:
+    if not isinstance(observation, Mapping):
+        return None
+    pose = observation.get("pose")
+    if not isinstance(pose, Mapping):
+        channels = observation.get("channels")
+        pose = channels.get("pose") if isinstance(channels, Mapping) else None
+    if not isinstance(pose, Mapping):
+        return None
+    frame = pose.get("frame")
+    coordinates = (pose.get("x"), pose.get("y"), pose.get("z", 0.0))
+    if not isinstance(frame, str) or not frame or any(
+        not isinstance(value, (int, float)) or isinstance(value, bool)
+        for value in coordinates
+    ):
+        return None
+    return frame, *(float(value) for value in coordinates)
+
+
+def _positions_separated(
+    current: tuple[str, float, float, float] | None,
+    previous: tuple[str, float, float, float] | None,
+    *,
+    minimum_m: float,
+) -> bool:
+    if current is None or previous is None:
+        return False
+    if current[0] != previous[0]:
+        return True
+    squared_distance = sum(
+        (current[index] - previous[index]) ** 2 for index in range(1, 4)
+    )
+    return squared_distance >= minimum_m**2
 
 
 def _center_depth_m(observation: Any, *, preferred: str) -> float | None:

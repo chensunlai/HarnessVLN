@@ -651,6 +651,61 @@ def test_normal_agent_limits_repeated_object_candidate_calls() -> None:
     run(scenario())
 
 
+def test_normal_agent_resets_object_candidate_limit_after_position_progress() -> None:
+    async def scenario() -> None:
+        outputs: list[list[Any]] = []
+        for index in range(4):
+            outputs.extend(
+                [
+                    [function_call(f"observe-{index}", "nav__observe", {})],
+                    [
+                        function_call(
+                            f"candidate-{index}",
+                            "vln__navigate__local",
+                            {
+                                "instruction": (
+                                    "Approach the visible cabinet and stop in front "
+                                    "of it."
+                                ),
+                                "max_steps": 1,
+                            },
+                        )
+                    ],
+                ]
+            )
+        outputs.append(
+            [
+                function_call(
+                    "stop",
+                    "nav__stop",
+                    {"status": "failed", "reason": "progress guard checked"},
+                )
+            ]
+        )
+        responses = ScriptedResponses(outputs)
+        goal = NavGoal(
+            "goal", "Find the cabinet.", "object", {"category": "cabinet"}
+        )
+        result = await NavigationHarness(timeout_s=1).run_task(
+            NavTask("candidate-progress", goal),
+            NavigationStack(
+                NormalAgent(
+                    "test-model",
+                    ("nav.observe", "vln.navigate.local"),
+                    client=SimpleNamespace(responses=responses),
+                ),
+                DummyNavigationEnvironment((goal,), targets=(10,)),
+                vln=DummyVLNNavigator(local_max_steps=1),
+            ),
+        )
+
+        assert result.terminal.status == "failed"
+        assert [event.name for event in result.audit].count("vln.navigate.local") == 4
+        assert result.environment["position"] == 4
+
+    run(scenario())
+
+
 def test_normal_agent_rejects_distant_object_finish() -> None:
     class DistantObjectEnvironment(DummyNavigationEnvironment):
         async def _observe(self, actor, arguments):
