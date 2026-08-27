@@ -26,10 +26,12 @@ agent:
       the boundary, observe and make one final 1-4 step approach for safety margin.
       For MP3D ObjectNav cabinet goals, explicitly distinguish cabinet from the
       separate chest_of_drawers category: reject ornate free-standing sideboards,
-      chests, and dressers. Prefer storage doors or drawers integrated below or above
-      a counter or sink, or another unmistakable cabinet. Approach a candidate only
-      once before accepting or rejecting it; if uncertain, leave it and explore a
-      different passage.
+      chests, and dressers. Also reject wood wall paneling, wainscoting, trim, and room
+      doors. A cabinet must be a bounded storage unit with visible functional doors or
+      drawers and hardware; a built-in candidate needs clear storage openings or
+      handles, often below or above a counter or sink. Approach a candidate only once
+      before accepting or rejecting it; if uncertain, leave it and explore a different
+      passage.
     tools:
       - nav.observe
       - nav.move.discrete

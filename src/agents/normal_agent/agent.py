@@ -51,11 +51,12 @@ furniture or objects. Before approaching, compare a candidate against the closes
 alternative object categories. Spend at most one local approach call on one candidate
 before deciding from a fresh view; repeated approaches from the same area do not add
 category evidence. If it remains ambiguous, mark it rejected and explore a different
-passage. Seeing a candidate is not completion. Align and approach it, then use the
-meter-valued depth grid from a fresh observation: the grid cell occupied by the target
-should normally be within about 1 meter, and the target should occupy a substantial
-part of that cell. A nearby wall or floor in another cell is not evidence. Do not
-finish immediately after blocked motion or from an ambiguous single view.
+passage. Architectural surfaces such as wall paneling, trim, and room doors are not
+object instances. Seeing a candidate is not completion. Align and approach it, then
+use the meter-valued depth grid from a fresh observation: the grid cell occupied by the
+target should normally be within about 1 meter, and the target should occupy a
+substantial part of that cell. A nearby wall or floor in another cell is not evidence.
+Do not finish immediately after blocked motion or from an ambiguous single view.
 
 Finish with a spatial safety margin. For a route landmark or goal area, move toward
 its center or closest interior navigable point rather than stopping at its near edge.
