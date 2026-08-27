@@ -6,7 +6,7 @@ import io
 import json
 import re
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -99,6 +99,8 @@ class NormalAgent:
         max_actions_per_turn: int = 4,
         reasoning_effort: str | None = None,
         observation_image_detail: str = "high",
+        observation_image_channel: str = "rgb",
+        observation_depth_channel: str = "depth",
         max_navigation_actions: int = 240,
         model_retries: int = 3,
         retry_backoff_s: float = 2.0,
@@ -118,6 +120,16 @@ class NormalAgent:
             raise ValueError(
                 "observation_image_detail must be low, high, or auto"
             )
+        if (
+            not isinstance(observation_image_channel, str)
+            or not observation_image_channel
+        ):
+            raise ValueError("observation_image_channel must not be empty")
+        if (
+            not isinstance(observation_depth_channel, str)
+            or not observation_depth_channel
+        ):
+            raise ValueError("observation_depth_channel must not be empty")
         if type(max_navigation_actions) is not int or max_navigation_actions <= 0:
             raise ValueError("max_navigation_actions must be positive")
         if model_retries < 0:
@@ -130,6 +142,8 @@ class NormalAgent:
         self.max_actions_per_turn = max_actions_per_turn
         self.reasoning_effort = reasoning_effort
         self.observation_image_detail = observation_image_detail
+        self.observation_image_channel = observation_image_channel
+        self.observation_depth_channel = observation_depth_channel
         self.max_navigation_actions = max_navigation_actions
         self.model_retries = model_retries
         self.retry_backoff_s = retry_backoff_s
@@ -164,6 +178,8 @@ class NormalAgent:
                 "max_actions_per_turn": self.max_actions_per_turn,
                 "reasoning_effort": self.reasoning_effort,
                 "observation_image_detail": self.observation_image_detail,
+                "observation_image_channel": self.observation_image_channel,
+                "observation_depth_channel": self.observation_depth_channel,
                 "max_navigation_actions": self.max_navigation_actions,
                 "model_retries": self.model_retries,
                 "retry_backoff_s": self.retry_backoff_s,
@@ -431,11 +447,27 @@ class NormalAgent:
                     if compact_images:
                         input_items = _compact_observation_images(input_items)
 
+                    image_channel = _observation_channel(
+                        canonical_name,
+                        tool_output,
+                        preferred=self.observation_image_channel,
+                        fallback="rgb",
+                        validator=_is_rgb_image,
+                    )
+                    depth_channel = _observation_channel(
+                        canonical_name,
+                        tool_output,
+                        preferred=self.observation_depth_channel,
+                        fallback="depth",
+                        validator=_is_depth_image,
+                    )
                     model_input = _function_call_output(
                         call.call_id,
                         canonical_name,
                         tool_output,
                         image_detail=self.observation_image_detail,
+                        image_channel=image_channel,
+                        depth_channel=depth_channel,
                     )
                     input_items.append(model_input)
                     trace(
@@ -446,7 +478,9 @@ class NormalAgent:
                         tool_name=canonical_name,
                         arguments=arguments,
                         output=_trace_data(tool_output),
-                        model_input=_trace_model_input(model_input),
+                        model_input=_trace_model_input(
+                            model_input, image_channel=image_channel
+                        ),
                     )
                     if canonical_name == "nav.stop" and tool_output["ok"]:
                         trace(
@@ -660,9 +694,13 @@ def _function_call_output(
     tool_output: dict[str, Any],
     *,
     image_detail: str,
+    image_channel: str | None,
+    depth_channel: str | None,
 ) -> dict[str, Any]:
-    output: Any = _json(_model_tool_output(tool_name, tool_output))
-    image_url = _observation_image_url(tool_name, tool_output)
+    output: Any = _json(
+        _model_tool_output(tool_name, tool_output, depth_channel=depth_channel)
+    )
+    image_url = _observation_image_url(tool_name, tool_output, image_channel)
     if image_url is not None:
         output = [
             {"type": "input_text", "text": output},
@@ -679,7 +717,9 @@ def _function_call_output(
     }
 
 
-def _trace_model_input(value: Mapping[str, Any]) -> dict[str, Any]:
+def _trace_model_input(
+    value: Mapping[str, Any], *, image_channel: str | None
+) -> dict[str, Any]:
     """Keep model-facing feedback while representing inline images compactly."""
     result = _trace_data(value)
     output = result.get("output")
@@ -693,7 +733,7 @@ def _trace_model_input(value: Mapping[str, Any]) -> dict[str, Any]:
             continue
         header, _, payload = image_url.partition(",")
         item["image_url"] = {
-            "source": "nav.observe.channels.rgb",
+            "source": f"nav.observe.channels.{image_channel}",
             "media_type": header.removeprefix("data:").split(";", 1)[0],
             "encoded_bytes": len(payload),
         }
@@ -745,7 +785,10 @@ def _accumulate_usage(total: dict[str, int], response: Any) -> None:
 
 
 def _model_tool_output(
-    tool_name: str | None, tool_output: Mapping[str, Any]
+    tool_name: str | None,
+    tool_output: Mapping[str, Any],
+    *,
+    depth_channel: str | None,
 ) -> dict[str, Any]:
     value = dict(tool_output)
     if tool_name != "nav.observe" or tool_output.get("ok") is not True:
@@ -757,10 +800,14 @@ def _model_tool_output(
     if not isinstance(channels, Mapping):
         return value
     depth_summary = _depth_summary(
-        channels.get("depth"), channels.get("depth_metadata")
+        channels.get(depth_channel) if depth_channel is not None else None,
+        channels.get("depth_metadata"),
     )
     if depth_summary is not None:
-        value["sensor_summary"] = {"depth": depth_summary}
+        value["sensor_summary"] = {
+            "depth": depth_summary,
+            "depth_channel": depth_channel,
+        }
     return value
 
 
@@ -849,8 +896,13 @@ def _finite_median(values: Any) -> float | None:
     return round(float(np.median(finite)), 4)
 
 
-def _observation_image_url(
-    tool_name: str | None, tool_output: Mapping[str, Any]
+def _observation_channel(
+    tool_name: str | None,
+    tool_output: Mapping[str, Any],
+    *,
+    preferred: str,
+    fallback: str,
+    validator: Callable[[Any], bool],
 ) -> str | None:
     if tool_name != "nav.observe" or tool_output.get("ok") is not True:
         return None
@@ -860,13 +912,31 @@ def _observation_image_url(
     channels = result.get("channels")
     if not isinstance(channels, Mapping):
         return None
-    rgb = channels.get("rgb")
-    if rgb is None:
+    for channel in dict.fromkeys((preferred, fallback)):
+        if validator(channels.get(channel)):
+            return channel
+    return None
+
+
+def _observation_image_url(
+    tool_name: str | None,
+    tool_output: Mapping[str, Any],
+    image_channel: str | None,
+) -> str | None:
+    if (
+        tool_name != "nav.observe"
+        or tool_output.get("ok") is not True
+        or image_channel is None
+    ):
         return None
-    shape = tuple(getattr(rgb, "shape", ()))
-    if len(shape) != 3 or shape[2] not in {3, 4} or min(shape) <= 0:
+    result = tool_output.get("result")
+    if not isinstance(result, Mapping):
         return None
-    if str(getattr(rgb, "dtype", "")) != "uint8":
+    channels = result.get("channels")
+    if not isinstance(channels, Mapping):
+        return None
+    rgb = channels.get(image_channel)
+    if not _is_rgb_image(rgb):
         return None
     from PIL import Image
 
@@ -875,6 +945,24 @@ def _observation_image_url(
     image.save(encoded, format="JPEG", quality=80, optimize=True)
     payload = base64.b64encode(encoded.getvalue()).decode("ascii")
     return f"data:image/jpeg;base64,{payload}"
+
+
+def _is_rgb_image(value: Any) -> bool:
+    shape = tuple(getattr(value, "shape", ()))
+    return (
+        len(shape) == 3
+        and shape[2] in {3, 4}
+        and min(shape) > 0
+        and str(getattr(value, "dtype", "")) == "uint8"
+    )
+
+
+def _is_depth_image(value: Any) -> bool:
+    shape = tuple(getattr(value, "shape", ()))
+    return (
+        (len(shape) == 2 or (len(shape) == 3 and shape[2] == 1))
+        and min(shape) > 0
+    )
 
 
 def _responses_tools(

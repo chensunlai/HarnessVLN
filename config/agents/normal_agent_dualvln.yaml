@@ -7,6 +7,8 @@ agent:
     max_actions_per_turn: 4
     max_navigation_actions: 240
     observation_image_detail: high
+    observation_image_channel: third_rgb
+    observation_depth_channel: third_depth
     model_retries: 4
     retry_backoff_s: 2.0
     guidance: >-

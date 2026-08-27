@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import io
 import json
 from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
 import pytest
+from PIL import Image
 
 from agents import NormalAgent
 from envs import DummyNavigationEnvironment
@@ -680,15 +683,21 @@ def test_normal_agent_stops_move_batch_after_blocked_motion() -> None:
     run(scenario())
 
 
-def test_normal_agent_returns_rgb_as_native_responses_image() -> None:
+def test_normal_agent_uses_preferred_rgbd_observation_channels() -> None:
     class VisualEnvironment(DummyNavigationEnvironment):
         async def _observe(self, actor, arguments):
             observation = await super()._observe(actor, arguments)
             observation["channels"]["rgb"] = np.zeros(
                 (480, 640, 3), dtype=np.uint8
             )
+            observation["channels"]["third_rgb"] = np.full(
+                (480, 640, 3), 200, dtype=np.uint8
+            )
             observation["channels"]["depth"] = np.full(
                 (480, 640, 1), 0.25, dtype=np.float32
+            )
+            observation["channels"]["third_depth"] = np.full(
+                (480, 640, 1), 0.5, dtype=np.float32
             )
             observation["channels"]["depth_metadata"] = {
                 "encoding": "linear_normalized",
@@ -713,6 +722,8 @@ def test_normal_agent_returns_rgb_as_native_responses_image() -> None:
         agent = NormalAgent(
             "test-model",
             ("nav.observe",),
+            observation_image_channel="third_rgb",
+            observation_depth_channel="third_depth",
             client=SimpleNamespace(responses=responses),
         )
         goal = NavGoal("goal", "inspect the image")
@@ -729,21 +740,25 @@ def test_normal_agent_returns_rgb_as_native_responses_image() -> None:
         assert content[0]["type"] == "input_text"
         model_output = json.loads(content[0]["text"])
         assert model_output["ok"] is True
+        assert model_output["sensor_summary"]["depth_channel"] == "third_depth"
         assert model_output["sensor_summary"]["depth"] == {
-            "center": 0.25,
-            "grid": [[0.25, 0.25, 0.25]] * 3,
-            "minimum": 0.25,
-            "maximum": 0.25,
+            "center": 0.5,
+            "grid": [[0.5, 0.5, 0.5]] * 3,
+            "minimum": 0.5,
+            "maximum": 0.5,
             "lower_is_nearer": True,
             "meters": {
-                "center": 1.5,
-                "grid": [[1.5, 1.5, 1.5]] * 3,
+                "center": 2.5,
+                "grid": [[2.5, 2.5, 2.5]] * 3,
                 "sensor_range": [0.5, 4.5],
             },
         }
         assert content[1]["type"] == "input_image"
         assert content[1]["detail"] == "high"
         assert content[1]["image_url"].startswith("data:image/jpeg;base64,")
+        encoded = content[1]["image_url"].partition(",")[2]
+        image = Image.open(io.BytesIO(base64.b64decode(encoded)))
+        assert float(np.asarray(image).mean()) > 190
 
     run(scenario())
 
