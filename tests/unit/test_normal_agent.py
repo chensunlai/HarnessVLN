@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
+import pytest
 
 from agents import NormalAgent
 from envs import DummyNavigationEnvironment
@@ -73,14 +74,15 @@ def test_normal_agent_runs_native_responses_tool_loop() -> None:
                         "call-3", "nav__move__discrete", {"action": "forward"}
                     ),
                 ],
+                [function_call("call-4", "nav__observe", {})],
                 [
                     function_call(
-                        "call-4", "nav__goal__finish", {"status": "success"}
+                        "call-5", "nav__goal__finish", {"status": "success"}
                     )
                 ],
                 [
                     function_call(
-                        "call-5",
+                        "call-6",
                         "nav__stop",
                         {"status": "success", "reason": "done"},
                     )
@@ -110,6 +112,7 @@ def test_normal_agent_runs_native_responses_tool_loop() -> None:
             "nav.observe",
             "nav.move.discrete",
             "nav.move.discrete",
+            "nav.observe",
             "nav.goal.finish",
             "nav.stop",
         ]
@@ -144,7 +147,9 @@ def test_normal_agent_runs_native_responses_tool_loop() -> None:
 
 def test_normal_agent_uses_one_blocking_local_vln_call() -> None:
     async def scenario() -> None:
-        local_instruction = "Move to the visible doorway straight ahead."
+        local_instruction = (
+            "Move to the visible doorway straight ahead and stop just beyond it."
+        )
         responses = ScriptedResponses(
             [
                 [function_call("observe", "nav__observe", {})],
@@ -152,7 +157,7 @@ def test_normal_agent_uses_one_blocking_local_vln_call() -> None:
                     function_call(
                         "local-vln",
                         "vln__navigate__local",
-                        {"instruction": local_instruction},
+                        {"instruction": local_instruction, "max_steps": 8},
                     )
                 ],
                 [
@@ -183,7 +188,10 @@ def test_normal_agent_uses_one_blocking_local_vln_call() -> None:
         local_event = next(
             event for event in result.audit if event.name == "vln.navigate.local"
         )
-        assert local_event.arguments == {"instruction": local_instruction}
+        assert local_event.arguments == {
+            "instruction": local_instruction,
+            "max_steps": 8,
+        }
         exposed = {tool["name"]: tool for tool in responses.requests[0]["tools"]}
         assert "vln__navigate__local" in exposed
         assert "vln__navigate__task" not in exposed
@@ -192,7 +200,7 @@ def test_normal_agent_uses_one_blocking_local_vln_call() -> None:
             for name in exposed
         )
         assert "visible" in exposed["vln__navigate__local"]["description"]
-        assert "never as an instruction to copy" in responses.requests[0][
+        assert "must never be copied or paraphrased" in responses.requests[0][
             "instructions"
         ]
 
@@ -202,14 +210,16 @@ def test_normal_agent_uses_one_blocking_local_vln_call() -> None:
 def test_normal_agent_requires_fresh_observation_and_local_instruction() -> None:
     async def scenario() -> None:
         goal_instruction = "Walk through the bedroom and dining room to the television."
-        visible_instruction = "Move to the visible doorway straight ahead."
+        visible_instruction = (
+            "Move to the visible doorway straight ahead and stop just beyond it."
+        )
         responses = ScriptedResponses(
             [
                 [
                     function_call(
                         "no-observation",
                         "vln__navigate__local",
-                        {"instruction": visible_instruction},
+                        {"instruction": visible_instruction, "max_steps": 8},
                     )
                 ],
                 [function_call("observe", "nav__observe", {})],
@@ -217,21 +227,21 @@ def test_normal_agent_requires_fresh_observation_and_local_instruction() -> None
                     function_call(
                         "copied-goal",
                         "vln__navigate__local",
-                        {"instruction": goal_instruction},
+                        {"instruction": goal_instruction, "max_steps": 8},
                     )
                 ],
                 [
                     function_call(
                         "valid-local",
                         "vln__navigate__local",
-                        {"instruction": visible_instruction},
+                        {"instruction": visible_instruction, "max_steps": 8},
                     )
                 ],
                 [
                     function_call(
                         "stale-observation",
                         "vln__navigate__local",
-                        {"instruction": visible_instruction},
+                        {"instruction": visible_instruction, "max_steps": 8},
                     )
                 ],
                 [
@@ -347,6 +357,14 @@ def test_normal_agent_enforces_four_action_hard_limit() -> None:
     else:
         raise AssertionError("NormalAgent accepted more than four actions per turn")
 
+    for value in (True, 0, -1):
+        with pytest.raises(ValueError, match="max_navigation_actions"):
+            NormalAgent(
+                "test-model",
+                ("nav.observe",),
+                max_navigation_actions=value,
+            )
+
 
 def test_normal_agent_rejects_five_model_actions_without_executing_them() -> None:
     async def scenario() -> None:
@@ -394,6 +412,237 @@ def test_normal_agent_rejects_five_model_actions_without_executing_them() -> Non
     run(scenario())
 
 
+def test_normal_agent_requires_fresh_finish_and_accepted_goal_before_stop() -> None:
+    async def scenario() -> None:
+        responses = ScriptedResponses(
+            [
+                [function_call("observe-1", "nav__observe", {})],
+                [
+                    function_call(
+                        "move", "nav__move__discrete", {"action": "forward"}
+                    )
+                ],
+                [
+                    function_call(
+                        "stale-finish",
+                        "nav__goal__finish",
+                        {"status": "completed"},
+                    )
+                ],
+                [function_call("observe-2", "nav__observe", {})],
+                [
+                    function_call(
+                        "early-stop",
+                        "nav__stop",
+                        {"status": "completed", "reason": "too early"},
+                    )
+                ],
+                [
+                    function_call(
+                        "finish", "nav__goal__finish", {"status": "completed"}
+                    )
+                ],
+                [
+                    function_call(
+                        "stop",
+                        "nav__stop",
+                        {"status": "completed", "reason": "accepted"},
+                    )
+                ],
+            ]
+        )
+        goal = NavGoal("goal", "move to the marker")
+        result = await NavigationHarness(timeout_s=1).run_task(
+            NavTask("finish-policy", goal),
+            NavigationStack(
+                NormalAgent(
+                    "test-model",
+                    ("nav.observe", "nav.move.discrete", "nav.goal.finish"),
+                    client=SimpleNamespace(responses=responses),
+                ),
+                DummyNavigationEnvironment((goal,), targets=(1,)),
+            ),
+        )
+
+        assert result.terminal.status == "completed"
+        assert [event.name for event in result.audit] == [
+            "nav.observe",
+            "nav.move.discrete",
+            "nav.observe",
+            "nav.goal.finish",
+            "nav.stop",
+        ]
+        stale_error = json.loads(responses.requests[3]["input"][-1]["output"])
+        stop_error = json.loads(responses.requests[5]["input"][-1]["output"])
+        assert "fresh nav.observe" in stale_error["error"]["message"]
+        assert "accepted final" in stop_error["error"]["message"]
+
+    run(scenario())
+
+
+def test_normal_agent_keeps_only_the_latest_observation_image() -> None:
+    class VisualEnvironment(DummyNavigationEnvironment):
+        async def _observe(self, actor, arguments):
+            observation = await super()._observe(actor, arguments)
+            observation["channels"]["rgb"] = np.zeros((12, 16, 3), dtype=np.uint8)
+            return observation
+
+    def image_count(request: dict[str, Any]) -> int:
+        return sum(
+            1
+            for item in request["input"]
+            if isinstance(item, dict)
+            for part in (
+                item.get("output", []) if isinstance(item.get("output"), list) else []
+            )
+            if isinstance(part, dict) and part.get("type") == "input_image"
+        )
+
+    async def scenario() -> None:
+        responses = ScriptedResponses(
+            [
+                [function_call("observe-1", "nav__observe", {})],
+                [
+                    function_call(
+                        "move", "nav__move__discrete", {"action": "forward"}
+                    )
+                ],
+                [function_call("observe-2", "nav__observe", {})],
+                [
+                    function_call(
+                        "stop", "nav__stop", {"status": "completed", "reason": "done"}
+                    )
+                ],
+            ]
+        )
+        goal = NavGoal("goal", "inspect while moving")
+        result = await NavigationHarness(timeout_s=1).run_task(
+            NavTask("image-window", goal),
+            NavigationStack(
+                NormalAgent(
+                    "test-model",
+                    ("nav.observe", "nav.move.discrete"),
+                    client=SimpleNamespace(responses=responses),
+                ),
+                VisualEnvironment((goal,), targets=(1,)),
+            ),
+        )
+
+        assert result.terminal.status == "completed"
+        assert image_count(responses.requests[1]) == 1
+        assert image_count(responses.requests[2]) == 0
+        assert image_count(responses.requests[3]) == 1
+
+    run(scenario())
+
+
+def test_normal_agent_navigation_budget_rejects_batch_before_execution() -> None:
+    async def scenario() -> None:
+        responses = ScriptedResponses(
+            [
+                [function_call("observe", "nav__observe", {})],
+                [
+                    function_call(
+                        f"too-many-{index}",
+                        "nav__move__discrete",
+                        {"action": "forward"},
+                    )
+                    for index in range(3)
+                ],
+                [
+                    function_call(
+                        f"move-{index}",
+                        "nav__move__discrete",
+                        {"action": "forward"},
+                    )
+                    for index in range(2)
+                ],
+                [
+                    function_call(
+                        "stop", "nav__stop", {"status": "completed", "reason": "done"}
+                    )
+                ],
+            ]
+        )
+        goal = NavGoal("goal", "move within budget")
+        result = await NavigationHarness(timeout_s=1).run_task(
+            NavTask("action-budget", goal),
+            NavigationStack(
+                NormalAgent(
+                    "test-model",
+                    ("nav.observe", "nav.move.discrete"),
+                    max_navigation_actions=2,
+                    client=SimpleNamespace(responses=responses),
+                ),
+                DummyNavigationEnvironment((goal,), targets=(2,)),
+            ),
+        )
+
+        assert result.environment["position"] == 2
+        assert [event.name for event in result.audit].count("nav.move.discrete") == 2
+        rejected = responses.requests[2]["input"][-3:]
+        assert all(
+            "remaining navigation action budget" in json.loads(item["output"])[
+                "error"
+            ]["message"]
+            for item in rejected
+        )
+
+    run(scenario())
+
+
+def test_normal_agent_stops_move_batch_after_blocked_motion() -> None:
+    class BlockingEnvironment(DummyNavigationEnvironment):
+        async def _move(self, actor, arguments):
+            result = await super()._move(actor, arguments)
+            result["motion"] = {"blocked": True}
+            return result
+
+    async def scenario() -> None:
+        responses = ScriptedResponses(
+            [
+                [function_call("observe", "nav__observe", {})],
+                [
+                    function_call(
+                        f"move-{index}",
+                        "nav__move__discrete",
+                        {"action": "forward"},
+                    )
+                    for index in range(3)
+                ],
+                [
+                    function_call(
+                        "stop", "nav__stop", {"status": "completed", "reason": "done"}
+                    )
+                ],
+            ]
+        )
+        goal = NavGoal("goal", "test blocked batch")
+        result = await NavigationHarness(timeout_s=1).run_task(
+            NavTask("blocked-batch", goal),
+            NavigationStack(
+                NormalAgent(
+                    "test-model",
+                    ("nav.observe", "nav.move.discrete"),
+                    client=SimpleNamespace(responses=responses),
+                ),
+                BlockingEnvironment((goal,), targets=(3,)),
+            ),
+        )
+
+        assert result.environment["action_count"] == 1
+        assert [event.name for event in result.audit] == [
+            "nav.observe",
+            "nav.move.discrete",
+            "nav.stop",
+        ]
+        batch_outputs = responses.requests[2]["input"][-3:]
+        skipped = [json.loads(item["output"]) for item in batch_outputs[1:]]
+        assert all(item["error"]["type"] == "ToolBatchSkipped" for item in skipped)
+
+    run(scenario())
+
+
 def test_normal_agent_returns_rgb_as_native_responses_image() -> None:
     class VisualEnvironment(DummyNavigationEnvironment):
         async def _observe(self, actor, arguments):
@@ -404,6 +653,11 @@ def test_normal_agent_returns_rgb_as_native_responses_image() -> None:
             observation["channels"]["depth"] = np.full(
                 (480, 640, 1), 0.25, dtype=np.float32
             )
+            observation["channels"]["depth_metadata"] = {
+                "encoding": "linear_normalized",
+                "minimum_m": 0.5,
+                "maximum_m": 4.5,
+            }
             return observation
 
     async def scenario() -> None:
@@ -444,6 +698,11 @@ def test_normal_agent_returns_rgb_as_native_responses_image() -> None:
             "minimum": 0.25,
             "maximum": 0.25,
             "lower_is_nearer": True,
+            "meters": {
+                "center": 1.5,
+                "grid": [[1.5, 1.5, 1.5]] * 3,
+                "sensor_range": [0.5, 4.5],
+            },
         }
         assert content[1]["type"] == "input_image"
         assert content[1]["detail"] == "high"

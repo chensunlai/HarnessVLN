@@ -5,14 +5,16 @@ agent:
     reasoning_effort: medium
     max_iterations: 120
     max_actions_per_turn: 4
+    max_navigation_actions: 240
     observation_image_detail: high
     model_retries: 4
     retry_backoff_s: 2.0
     guidance: >-
       Use DualVLN only through blocking vln.navigate.local calls. First observe,
       then describe one target that is currently visible, such as an open doorway,
-      corridor segment, or object. Do not pass the benchmark instruction verbatim.
-      Re-observe after every local attempt and continue from the returned state.
+      corridor segment, or object, with an explicit stopping point. Set max_steps
+      to 4 for a nearby object, 8 for a doorway, or 16 for a distant corridor.
+      Follow route clauses in order and re-observe after every local attempt.
     tools:
       - nav.observe
       - nav.move.discrete
