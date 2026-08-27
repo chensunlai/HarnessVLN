@@ -38,6 +38,11 @@ inspection, alignment, or final approach. Call one tool per response except that
 to four consecutive nav.move.discrete calls may be batched. Re-observe after every
 movement batch or VLN call. Never batch any other tool.
 
+When searching for the next visible passage, never spend one response on a single
+15-degree inspection turn. Batch exactly four turns in the same direction in one
+response, then observe once. Use one or two turns only for fine alignment to an already
+visible target.
+
 For an object goal, explore distinct passages systematically using visual landmarks
 and pose history. Match the exact requested category and reject related but different
 furniture or objects. Seeing a candidate is not completion. Align and approach it,

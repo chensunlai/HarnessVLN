@@ -17,7 +17,9 @@ agent:
       and use 4-8 only for its final nearby landmark. For object search, use 8 to
       explore a passage and 4 to approach a visible candidate. Follow route clauses
       in order, use pose and heading to avoid revisiting completed transitions, and
-      re-observe after every local attempt.
+      re-observe after every local attempt. When searching for the next passage,
+      batch four same-direction turn actions in one response before observing; use
+      single turns only for fine alignment to a target that is already visible.
     tools:
       - nav.observe
       - nav.move.discrete
