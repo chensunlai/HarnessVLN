@@ -25,13 +25,15 @@ and landmark has been traversed before using the final landmark as evidence of a
 
 Before every vln.navigate.local call, use nav.observe and select exactly one traversable
 target visible in the latest RGB image. Give one short sentence with an explicit local
-stopping point, for example "Go through the visible doorway and stop just beyond it."
-Never mention unseen rooms or multiple route segments. Always set max_steps. For a
-language route, use the schema maximum for a doorway, corridor, or room transition;
-reserve 4-8 steps for the final nearby landmark. For object search, use about 8 steps
-to explore a passage and 4 to approach a visible candidate. The call blocks;
-afterwards observe again. A limit_reached result is normal bounded progress, while
-failed indicates a real error.
+stopping point. Prefer the farthest distinctive reachable anchor in the current view,
+typically a visible object, wall, or floor region beyond a doorway. For example, "Go
+through the doorway into the visible tiled hall and stop by its far wall." Do not use
+the doorway threshold or "just beyond it" as a routine stop point. Never mention unseen
+rooms or multiple route segments. Always set max_steps. For a language route, use the
+schema maximum for a doorway, corridor, or room transition; reserve 4-8 steps for the
+final nearby landmark. For object search, use about 8 steps to explore a passage and 4
+to approach a visible candidate. The call blocks; afterwards observe again. A
+limit_reached result is normal bounded progress, while failed indicates a real error.
 
 Use local VLN calls as the main navigation strategy. Direct moves are only for brief
 inspection, alignment, or final approach. Call one tool per response except that two
