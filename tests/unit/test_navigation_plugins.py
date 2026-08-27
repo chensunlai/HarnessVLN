@@ -71,9 +71,9 @@ def test_local_vln_call_blocks_until_its_bounded_attempt_finishes() -> None:
 
         assert result.terminal.status == "completed"
         assert agent.status == {
-            "state": "failed",
+            "state": "limit_reached",
             "steps": 2,
-            "reason": "maximum VLN steps reached",
+            "reason": "step limit reached: 2",
         }
         assert result.environment["position"] == 2
         assert [event.name for event in result.audit].count("vln.navigate.local") == 1

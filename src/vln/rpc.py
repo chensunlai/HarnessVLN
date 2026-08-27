@@ -619,7 +619,9 @@ class RPCVLNNavigator:
     required_tools: frozenset[str] = frozenset()
     requirements: dict[str, Any] = {}
     _active_states = frozenset({"running", "cancelling"})
-    _terminal_states = frozenset({"succeeded", "cancelled", "failed"})
+    _terminal_states = frozenset(
+        {"succeeded", "limit_reached", "cancelled", "failed"}
+    )
 
     def __init__(
         self,
@@ -634,7 +636,7 @@ class RPCVLNNavigator:
         local_max_steps: int = 16,
         status_poll_s: float = 0.1,
     ) -> None:
-        if local_max_steps <= 0:
+        if type(local_max_steps) is not int or local_max_steps <= 0:
             raise ValueError("local_max_steps must be positive")
         if status_poll_s < 0:
             raise ValueError("status_poll_s must not be negative")
@@ -762,6 +764,16 @@ class RPCVLNNavigator:
                                 "in the latest observation."
                             ),
                         },
+                        "max_steps": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": self.local_max_steps,
+                            "description": (
+                                "Bound for this visible-target attempt. Use a short "
+                                "budget for nearby objects and the configured maximum "
+                                "only for distant visible passages."
+                            ),
+                        },
                     },
                     "required": ["instruction"],
                     "additionalProperties": False,
@@ -775,10 +787,11 @@ class RPCVLNNavigator:
         return await self._run_blocking_job(actor, arguments["instruction"], {})
 
     async def _navigate_local(self, actor: str, arguments: dict[str, Any]) -> Any:
+        max_steps = arguments.get("max_steps", self.local_max_steps)
         return await self._run_blocking_job(
             actor,
             arguments["instruction"],
-            {"max_steps": self.local_max_steps},
+            {"max_steps": max_steps},
         )
 
     async def _run_blocking_job(
@@ -794,7 +807,9 @@ class RPCVLNNavigator:
                 status = await self._status_job(actor, {"job_id": job_id})
                 if status["state"] in self._terminal_states:
                     return {
-                        key: value for key, value in status.items() if key != "job_id"
+                        key: value
+                        for key, value in status.items()
+                        if key not in {"job_id", "traceback"}
                     }
                 await asyncio.sleep(self.status_poll_s)
         except asyncio.CancelledError as cancellation:

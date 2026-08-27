@@ -23,7 +23,7 @@ class WorkerBackend(Protocol):
         options: Mapping[str, Any],
         tools: WorkerTools,
         cancelled: threading.Event,
-    ) -> str | None: ...
+    ) -> str | Mapping[str, Any] | None: ...
 
     def close(self) -> None: ...
 
@@ -185,11 +185,11 @@ class WorkerRuntime:
         cancelled: threading.Event,
     ) -> None:
         try:
-            reason = self.backend.navigate(
+            outcome = self.backend.navigate(
                 instruction, options, WorkerTools(self, job_id), cancelled
             )
-            state = "cancelled" if cancelled.is_set() else "succeeded"
-            self._set_job(job_id, state, reason or state)
+            state, reason, details = _normalize_outcome(outcome, cancelled)
+            self._set_job(job_id, state, reason, **details)
         except Exception as error:
             self._set_job(
                 job_id,
@@ -294,6 +294,33 @@ class WorkerRuntime:
         with self._write_lock:
             self._writer.write(json.dumps(message, separators=(",", ":")) + "\n")
             self._writer.flush()
+
+
+def _normalize_outcome(
+    value: str | Mapping[str, Any] | None,
+    cancelled: threading.Event,
+) -> tuple[str, str, dict[str, Any]]:
+    if not isinstance(value, Mapping):
+        state = "cancelled" if cancelled.is_set() else "succeeded"
+        return state, value or state, {}
+
+    state = value.get("state")
+    reason = value.get("reason")
+    if state not in {"succeeded", "limit_reached", "cancelled", "failed"}:
+        raise ValueError(f"backend returned invalid navigation state: {state!r}")
+    if not isinstance(reason, str):
+        raise ValueError("backend navigation reason must be a string")
+    details = {
+        str(key): item
+        for key, item in value.items()
+        if key not in {"state", "reason"}
+    }
+    steps = details.get("steps")
+    if steps is not None and (type(steps) is not int or steps < 0):
+        raise ValueError("backend navigation steps must be a non-negative integer")
+    if cancelled.is_set() and state != "failed":
+        state = "cancelled"
+    return state, reason, details
 
 
 def run_worker(backend: WorkerBackend) -> None:

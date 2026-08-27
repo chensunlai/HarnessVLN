@@ -104,6 +104,11 @@ class DummyVLNNavigator:
                                 "in the latest observation."
                             ),
                         },
+                        "max_steps": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": self.local_max_steps,
+                        },
                     },
                     "required": ["instruction"],
                     "additionalProperties": False,
@@ -122,7 +127,9 @@ class DummyVLNNavigator:
         self, actor: str, arguments: dict[str, Any]
     ) -> dict[str, Any]:
         return await self._navigate(
-            actor, arguments["instruction"], self.local_max_steps
+            actor,
+            arguments["instruction"],
+            arguments.get("max_steps", self.local_max_steps),
         )
 
     async def _navigate(
@@ -159,8 +166,8 @@ class DummyVLNNavigator:
                 await self._tools.call("nav.move.discrete", action=action)
                 job.steps += 1
                 await asyncio.sleep(self.inference_period_s)
-            job.state = "failed"
-            job.reason = "maximum VLN steps reached"
+            job.state = "limit_reached"
+            job.reason = f"step limit reached: {max_steps}"
         except asyncio.CancelledError:
             job.state = "cancelled"
             job.reason = "job cancelled"

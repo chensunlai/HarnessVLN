@@ -212,6 +212,81 @@ def test_rpc_navigator_exposes_one_blocking_task_tool(tmp_path) -> None:
     asyncio.run(scenario())
 
 
+def test_rpc_local_call_uses_requested_bounded_budget(tmp_path, monkeypatch) -> None:
+    async def scenario():
+        navigator = RPCVLNNavigator(
+            ("worker",),
+            upstream_root=tmp_path,
+            checkpoint=tmp_path / "checkpoint",
+            local_max_steps=16,
+        )
+        captured = {}
+
+        async def run_blocking(actor, instruction, options):
+            captured.update(actor=actor, instruction=instruction, options=dict(options))
+            return {"state": "limit_reached", "steps": 4, "reason": "limit"}
+
+        monkeypatch.setattr(navigator, "_run_blocking_job", run_blocking)
+
+        result = await navigator._navigate_local(
+            "agent", {"instruction": "Stop beside the visible chair.", "max_steps": 4}
+        )
+
+        assert result["steps"] == 4
+        assert captured == {
+            "actor": "agent",
+            "instruction": "Stop beside the visible chair.",
+            "options": {"max_steps": 4},
+        }
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("value", [True, 1.5, 0, -1])
+def test_rpc_local_step_limit_requires_positive_integer(tmp_path, value) -> None:
+    with pytest.raises(ValueError, match="local_max_steps"):
+        RPCVLNNavigator(
+            ("worker",),
+            upstream_root=tmp_path,
+            checkpoint=tmp_path / "checkpoint",
+            local_max_steps=value,
+        )
+
+
+def test_rpc_blocking_result_does_not_expose_worker_traceback(
+    tmp_path, monkeypatch
+) -> None:
+    async def scenario():
+        navigator = RPCVLNNavigator(
+            ("worker",),
+            upstream_root=tmp_path,
+            checkpoint=tmp_path / "checkpoint",
+        )
+
+        async def start_job(actor, arguments):
+            return {"job_id": "job"}
+
+        async def status_job(actor, arguments):
+            return {
+                "job_id": "job",
+                "state": "failed",
+                "reason": "RuntimeError: inference failed",
+                "traceback": "internal worker traceback",
+            }
+
+        monkeypatch.setattr(navigator, "_start_job", start_job)
+        monkeypatch.setattr(navigator, "_status_job", status_job)
+
+        result = await navigator._run_blocking_job("agent", "local", {})
+
+        assert result == {
+            "state": "failed",
+            "reason": "RuntimeError: inference failed",
+        }
+
+    asyncio.run(scenario())
+
+
 def test_worker_sdk_runs_model_owned_navigation_loop(tmp_path) -> None:
     class SDKNavigator(RPCVLNNavigator):
         model_name = "sdk-fixture"

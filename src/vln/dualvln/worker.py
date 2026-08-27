@@ -46,6 +46,7 @@ ACTION_MAP = {
     2: "turn_left",
     3: "turn_right",
 }
+MODEL_MAX_DEPTH_M = 10.0
 
 
 class DualPolicy(Protocol):
@@ -91,38 +92,40 @@ class DualVLNBackend:
         options: Mapping[str, Any],
         tools: WorkerTools,
         cancelled: threading.Event,
-    ) -> str:
+    ) -> dict[str, Any]:
         if not self._loaded:
             raise RuntimeError("DualVLN backend is not loaded")
         limit = _job_step_limit(options, self.max_steps)
         with self._job_lock:
+            steps = 0
             if cancelled.is_set():
-                return "cancelled"
+                return _outcome("cancelled", steps, "job cancelled")
             self.policy.reset()
             for _ in range(limit):
                 if cancelled.is_set():
-                    return "cancelled"
+                    return _outcome("cancelled", steps, "job cancelled")
                 observation = tools.observe()
                 rgb, depth = _require_rgbd(observation, self.height, self.width)
                 if cancelled.is_set():
-                    return "cancelled"
+                    return _outcome("cancelled", steps, "job cancelled")
                 output = self.policy.step(
                     [{"rgb": rgb, "depth": depth, "instruction": instruction}]
                 )
                 if cancelled.is_set():
-                    return "cancelled"
+                    return _outcome("cancelled", steps, "job cancelled")
                 action = _require_action(output)
                 if action == 0:
-                    return "model emitted STOP"
+                    return _outcome("succeeded", steps, "model emitted STOP")
                 mapped = ACTION_MAP.get(action)
                 if mapped is None:
                     raise ValueError(f"unsupported DualVLN action: {action}")
                 if cancelled.is_set():
-                    return "cancelled"
+                    return _outcome("cancelled", steps, "job cancelled")
                 tools.move_discrete(mapped)
+                steps += 1
                 if cancelled.is_set():
-                    return "cancelled"
-            raise RuntimeError(f"DualVLN exceeded maximum step count: {limit}")
+                    return _outcome("cancelled", steps, "job cancelled")
+            return _outcome("limit_reached", steps, f"step limit reached: {limit}")
 
     def close(self) -> None:
         if self._loaded:
@@ -262,7 +265,32 @@ def _require_rgbd(
         raise ValueError("DualVLN depth contains non-finite values")
     if depth.size and (float(depth.min()) < 0.0 or float(depth.max()) > 1.0):
         raise ValueError("DualVLN expects depth normalized to [0, 1]")
-    return rgb, depth
+    return rgb, _normalize_model_depth(depth, channels.get("depth_metadata"))
+
+
+def _normalize_model_depth(depth: Any, metadata: Any) -> Any:
+    if metadata is None:
+        return depth
+    if not isinstance(metadata, Mapping):
+        raise ValueError("DualVLN depth_metadata must be an object")
+    if metadata.get("encoding") != "linear_normalized":
+        raise ValueError("DualVLN only supports linear_normalized depth metadata")
+    minimum = metadata.get("minimum_m")
+    maximum = metadata.get("maximum_m")
+    if (
+        not isinstance(minimum, (int, float))
+        or isinstance(minimum, bool)
+        or not isinstance(maximum, (int, float))
+        or isinstance(maximum, bool)
+        or not 0.0 <= float(minimum) < float(maximum) <= MODEL_MAX_DEPTH_M
+    ):
+        raise ValueError("DualVLN depth metadata must describe a valid 0-10m range")
+    physical = float(minimum) + depth * (float(maximum) - float(minimum))
+    return np.asarray(physical / MODEL_MAX_DEPTH_M, dtype=np.float32)
+
+
+def _outcome(state: str, steps: int, reason: str) -> dict[str, Any]:
+    return {"state": state, "steps": steps, "reason": reason}
 
 
 def _require_action(output: Any) -> int:

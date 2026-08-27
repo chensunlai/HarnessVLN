@@ -84,6 +84,27 @@ def test_cancelled_job_keeps_worker_exclusive_until_thread_exits() -> None:
     assert runtime._job_status({"job_id": second["job_id"]})["state"] == "succeeded"
 
 
+def test_worker_preserves_structured_navigation_outcome() -> None:
+    class StructuredBackend(Backend):
+        def navigate(self, instruction, options, tools, cancelled):
+            return {
+                "state": "limit_reached",
+                "steps": 4,
+                "reason": "step limit reached: 4",
+            }
+
+    runtime = WorkerRuntime(StructuredBackend())
+    started = runtime._start_job({"instruction": "local", "options": {}})
+    runtime._job_threads[started["job_id"]].join(timeout=1)
+
+    assert runtime._job_status({"job_id": started["job_id"]}) == {
+        "job_id": started["job_id"],
+        "state": "limit_reached",
+        "steps": 4,
+        "reason": "step limit reached: 4",
+    }
+
+
 def test_release_waits_for_reverse_calls_owned_by_backend_child_threads() -> None:
     child_threads = []
     child_errors = []
