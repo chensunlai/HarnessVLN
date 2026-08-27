@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import sys
 import time
 from collections.abc import Callable, Mapping, Sequence
@@ -82,6 +83,8 @@ class HabitatEnvironment:
             ),
             camera=dict(camera or {}),
         )
+        self._forward_m = float(forward_m)
+        self._turn_deg = float(turn_deg)
         self._session: Any = None
         self._observation: Mapping[str, Any] = {}
         self._running = False
@@ -182,8 +185,10 @@ class HabitatEnvironment:
             if generation != self._generation:
                 raise ToolClosedError("stale Habitat motion generation")
             native_action = self.native_actions[arguments["action"]]
+            pose_before = self._pose()
             if native_action is not None:
                 self._observation = self._session.step(native_action)
+            pose_after = self._pose()
             self._action_count += 1
             self._actions_this_goal += 1
             self._record_main_camera("action")
@@ -194,6 +199,13 @@ class HabitatEnvironment:
                 "action_count": self._action_count,
                 "goal_action_count": self._actions_this_goal,
                 "native_terminal": self._native_terminal(),
+                "motion": _motion_feedback(
+                    arguments["action"],
+                    pose_before,
+                    pose_after,
+                    forward_m=self._forward_m,
+                    turn_deg=self._turn_deg,
+                ),
             }
 
     async def _finish_goal(
@@ -496,3 +508,40 @@ def _rewrite_prefix(value: str, rewrites: Mapping[str, str]) -> str:
         if value.startswith(source):
             return f"{destination}{value[len(source):]}"
     return value
+
+
+def _motion_feedback(
+    action: str,
+    before: Pose | None,
+    after: Pose | None,
+    *,
+    forward_m: float,
+    turn_deg: float,
+) -> dict[str, Any] | None:
+    if before is None or after is None or before.frame != after.frame:
+        return None
+    translation = math.dist(
+        (before.x, before.y, before.z),
+        (after.x, after.y, after.z),
+    )
+    rotation = (
+        math.degrees(
+            math.atan2(
+                math.sin(after.yaw - before.yaw),
+                math.cos(after.yaw - before.yaw),
+            )
+        )
+        if before.yaw is not None and after.yaw is not None
+        else None
+    )
+    blocked = False
+    if action == "forward":
+        blocked = translation < forward_m * 0.5
+    elif action in {"turn_left", "turn_right"} and rotation is not None:
+        blocked = abs(rotation) < turn_deg * 0.5
+    return {
+        "translation_m": round(translation, 4),
+        "rotation_deg": round(rotation, 3) if rotation is not None else None,
+        "blocked": blocked,
+        "pose": after.as_dict(),
+    }

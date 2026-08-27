@@ -234,9 +234,40 @@ def test_habitat_explicit_noop_is_a_logical_action_without_native_stop() -> None
             "action_count": 1,
             "goal_action_count": 1,
             "native_terminal": False,
+            "motion": {
+                "translation_m": 0.0,
+                "rotation_deg": 0.0,
+                "blocked": False,
+                "pose": {
+                    "frame": "habitat_episode",
+                    "x": 1.0,
+                    "y": 2.0,
+                    "z": 0.0,
+                    "yaw": 0.5,
+                },
+            },
         }
         assert session.actions == []
         assert environment.result()["action_count"] == 1
+
+    asyncio.run(scenario())
+
+
+def test_habitat_atomic_motion_reports_blocked_forward() -> None:
+    async def scenario():
+        fixture = compound_case()
+        environment = HabitatEnvironment(
+            fixture.environment_episode,
+            native_factory=lambda _: FakeHabitatSession(),
+        )
+
+        await environment.start(fixture.task)
+        result = await environment._move("agent", {"action": "forward"})
+        await environment.stop("done")
+
+        assert result["motion"]["translation_m"] == 0.0
+        assert result["motion"]["rotation_deg"] == 0.0
+        assert result["motion"]["blocked"] is True
 
     asyncio.run(scenario())
 
