@@ -1,5 +1,4 @@
 agent:
     factory: agents.passthrough:PassthroughVLNAgent
-    params:
-      poll_period_s: 0.0
+    params: {}
     vln: ../vln/dummy.yaml

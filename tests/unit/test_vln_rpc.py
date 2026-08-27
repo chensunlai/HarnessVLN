@@ -179,7 +179,7 @@ def test_close_kills_worker_descendants_after_leader_already_exited(
     asyncio.run(scenario())
 
 
-def test_rpc_navigator_runs_through_standard_job_tools(tmp_path) -> None:
+def test_rpc_navigator_exposes_one_blocking_task_tool(tmp_path) -> None:
     async def scenario():
         checkpoint = tmp_path / "checkpoint"
         checkpoint.write_text("fixture")
@@ -193,14 +193,21 @@ def test_rpc_navigator_runs_through_standard_job_tools(tmp_path) -> None:
         result = await NavigationHarness(timeout_s=2).run_task(
             NavTask("rpc", goal),
             NavigationStack(
-                PassthroughVLNAgent(poll_period_s=0),
+                PassthroughVLNAgent(),
                 DummyNavigationEnvironment((goal,), targets=(0,)),
                 vln=navigator,
             ),
         )
         assert result.terminal.status == "completed"
-        assert [event.name for event in result.audit].count("vln.navigate.start") == 1
-        assert any(event.name == "vln.navigate.status" for event in result.audit)
+        assert [event.name for event in result.audit].count("vln.navigate.task") == 1
+        assert not any(
+            event.name in {
+                "vln.navigate.start",
+                "vln.navigate.status",
+                "vln.navigate.cancel",
+            }
+            for event in result.audit
+        )
 
     asyncio.run(scenario())
 
@@ -233,7 +240,7 @@ def test_worker_sdk_runs_model_owned_navigation_loop(tmp_path) -> None:
         result = await NavigationHarness(timeout_s=2).run_task(
             NavTask("sdk", goal),
             NavigationStack(
-                PassthroughVLNAgent(poll_period_s=0),
+                PassthroughVLNAgent(),
                 ArrayEnvironment((goal,), targets=(2,)),
                 vln=navigator,
             ),
@@ -289,7 +296,7 @@ def test_session_scoped_worker_is_reused_and_releases_each_jobs_media(tmp_path) 
             result = await NavigationHarness(timeout_s=2).run_task(
                 NavTask(f"task-{index}", goal),
                 NavigationStack(
-                    PassthroughVLNAgent(poll_period_s=0),
+                    PassthroughVLNAgent(),
                     ArrayEnvironment((goal,), targets=(2,)),
                     vln=navigator,
                 ),

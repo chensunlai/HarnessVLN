@@ -14,11 +14,19 @@ from harness.tool_bus import ToolSpec
 
 
 DEFAULT_INSTRUCTIONS = """You are the decision core of a navigation agent.
-Keep control of the task with tool calls. Delegate the main navigation attempt to a
-VLN tool when one is available; direct atomic moves are only for short inspection or
-correction and must not be the sole task strategy. Call one tool per response except
-that you may emit two to four consecutive nav.move.discrete calls; they execute in
-output order. Never batch observation, VLN, memory, goal-finish, or stop calls.
+Keep control of the complete task with tool calls. Treat the benchmark instruction as
+the global objective, never as an instruction to copy into a VLN tool. Before every
+vln.navigate.local call, use nav.observe and identify exactly one traversable landmark,
+opening, object, or free-space region that is visible in the latest RGB image. Give the
+VLN one short instruction to reach only that visible target. Never mention unseen
+rooms, later waypoints, or multiple route segments. The local VLN call blocks until
+that attempt stops; after it returns, observe again and choose the next visible target.
+A local failure or step-limit result means inspect and replan, not that the complete
+task failed. Use a sequence of local VLN calls as the main navigation strategy;
+direct atomic moves are only for short inspection or correction and must not be the
+sole task strategy. Call one tool per response except that you may emit two to four
+consecutive nav.move.discrete calls; they execute in output order. Never batch
+observation, VLN, memory, goal-finish, or stop.
 Finish each current goal with the goal-finish tool. Finish the complete task only
 with the stop tool. For both tools use status "completed" after success and status
 "failed" after failure; never use "success" as a status. Do not end a turn with
@@ -39,6 +47,10 @@ fresh observations after the most recent block before considering goal-finish.""
 REASONING_EFFORTS = frozenset(
     {"none", "minimal", "low", "medium", "high", "xhigh"}
 )
+
+
+class AgentToolPolicyError(ValueError):
+    pass
 
 
 class NormalAgent:
@@ -86,6 +98,23 @@ class NormalAgent:
         self.model_retries = model_retries
         self.retry_backoff_s = retry_backoff_s
         self.required_tools = frozenset(tools)
+        forbidden_vln_tools = self.required_tools & {
+            "vln.navigate.task",
+            "vln.navigate.start",
+            "vln.navigate.status",
+            "vln.navigate.cancel",
+        }
+        if forbidden_vln_tools:
+            names = ", ".join(sorted(forbidden_vln_tools))
+            raise ValueError(
+                "NormalAgent only supports blocking local VLN navigation; "
+                f"remove: {names}"
+            )
+        if (
+            "vln.navigate.local" in self.required_tools
+            and "nav.observe" not in self.required_tools
+        ):
+            raise ValueError("vln.navigate.local requires nav.observe")
         self._client = client
 
     async def run(self, context: NavContext) -> None:
@@ -118,6 +147,8 @@ class NormalAgent:
         trace_sequence = 0
         response_count = 0
         usage: dict[str, int] = {}
+        fresh_observation = False
+        task_instructions = {_instruction_key(context.task.instruction)}
 
         def trace(event_type: str, **data: Any) -> None:
             nonlocal trace_sequence
@@ -229,7 +260,38 @@ class NormalAgent:
                             arguments = _normalize_tool_arguments(
                                 canonical_name, arguments
                             )
+                            if canonical_name == "vln.navigate.local":
+                                if not fresh_observation:
+                                    raise AgentToolPolicyError(
+                                        "vln.navigate.local requires a fresh nav.observe "
+                                        "after the most recent movement or VLN call"
+                                    )
+                                if (
+                                    _instruction_key(arguments.get("instruction"))
+                                    in task_instructions
+                                ):
+                                    raise AgentToolPolicyError(
+                                        "a local VLN instruction must describe one target "
+                                        "visible in the latest observation, not copy the "
+                                        "current benchmark goal"
+                                    )
+                                fresh_observation = False
+                            elif canonical_name == "nav.move.discrete":
+                                fresh_observation = False
                             result = await context.tools.call(canonical_name, arguments)
+                            if canonical_name == "nav.observe":
+                                fresh_observation = True
+                            elif canonical_name == "nav.goal.finish":
+                                fresh_observation = False
+                                next_goal = (
+                                    result.get("goal")
+                                    if isinstance(result, Mapping)
+                                    else None
+                                )
+                                if isinstance(next_goal, Mapping):
+                                    task_instructions.add(
+                                        _instruction_key(next_goal.get("instruction"))
+                                    )
                             tool_output = {"ok": True, "result": result}
                         except Exception as error:
                             tool_output = _error_output(type(error).__name__, str(error))
@@ -352,6 +414,10 @@ def _normalize_tool_arguments(
     if normalized in {"failure", "error", "unsuccessful"}:
         return {**arguments, "status": "failed"}
     return arguments
+
+
+def _instruction_key(value: Any) -> str:
+    return " ".join(value.split()).casefold() if isinstance(value, str) else ""
 
 
 def _function_call_output(

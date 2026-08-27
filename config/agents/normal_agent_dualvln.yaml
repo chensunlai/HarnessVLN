@@ -9,18 +9,15 @@ agent:
     model_retries: 4
     retry_backoff_s: 2.0
     guidance: >-
-      For a language-modality route goal, pass an empty options object to
-      vln.navigate.start and let DualVLN complete its route; do not set max_steps.
-      For an object goal, limit vln.navigate.start options.max_steps to 16 because
-      DualVLN is only a short route-search prior; reaching that limit is not task
-      failure, so continue with visual inspection and atomic corrections.
+      Use DualVLN only through blocking vln.navigate.local calls. First observe,
+      then describe one target that is currently visible, such as an open doorway,
+      corridor segment, or object. Do not pass the benchmark instruction verbatim.
+      Re-observe after every local attempt and continue from the returned state.
     tools:
       - nav.observe
       - nav.move.discrete
       - nav.goal.finish
-      - vln.navigate.start
-      - vln.navigate.status
-      - vln.navigate.cancel
+      - vln.navigate.local
   vln: ../vln/dualvln.yaml
 provenance:
   combination: normal-agent-terra-medium-dualvln

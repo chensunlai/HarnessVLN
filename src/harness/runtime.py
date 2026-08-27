@@ -66,17 +66,11 @@ class VLNTools:
     def __init__(self, client: ToolClient) -> None:
         self._client = client
 
-    async def start(self, instruction: str, options: JsonObject | None = None) -> str:
-        result = await self._client.call(
-            "vln.navigate.start", instruction=instruction, options=options or {}
-        )
-        return result["job_id"]
+    async def navigate_task(self, instruction: str) -> JsonObject:
+        return await self._client.call("vln.navigate.task", instruction=instruction)
 
-    async def status(self, job_id: str) -> JsonObject:
-        return await self._client.call("vln.navigate.status", job_id=job_id)
-
-    async def cancel(self, job_id: str) -> JsonObject:
-        return await self._client.call("vln.navigate.cancel", job_id=job_id)
+    async def navigate_local(self, instruction: str) -> JsonObject:
+        return await self._client.call("vln.navigate.local", instruction=instruction)
 
 
 class SpatialTools:

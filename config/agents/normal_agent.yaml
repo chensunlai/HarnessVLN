@@ -7,9 +7,7 @@ agent:
         - nav.observe
         - nav.move.discrete
         - nav.goal.finish
-        - vln.navigate.start
-        - vln.navigate.status
-        - vln.navigate.cancel
+        - vln.navigate.local
         - spatial.search
         - spatial.remember
     vln: ../vln/dummy.yaml

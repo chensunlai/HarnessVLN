@@ -12,6 +12,7 @@ from envs import DummyNavigationEnvironment
 from harness import NavigationHarness, NavigationStack
 from harness.output import RunOutput
 from schemas import NavGoal, NavTask
+from vln import DummyVLNNavigator
 
 
 class ScriptedResponses:
@@ -139,6 +140,158 @@ def test_normal_agent_runs_native_responses_tool_loop() -> None:
         assert json.loads(observation_output["output"])["ok"] is True
 
     run(scenario())
+
+
+def test_normal_agent_uses_one_blocking_local_vln_call() -> None:
+    async def scenario() -> None:
+        local_instruction = "Move to the visible doorway straight ahead."
+        responses = ScriptedResponses(
+            [
+                [function_call("observe", "nav__observe", {})],
+                [
+                    function_call(
+                        "local-vln",
+                        "vln__navigate__local",
+                        {"instruction": local_instruction},
+                    )
+                ],
+                [
+                    function_call(
+                        "stop",
+                        "nav__stop",
+                        {"status": "completed", "reason": "local call returned"},
+                    )
+                ],
+            ]
+        )
+        agent = NormalAgent(
+            "test-model",
+            ("nav.observe", "vln.navigate.local"),
+            client=SimpleNamespace(responses=responses),
+        )
+        goal = NavGoal("goal", "walk through several rooms to the destination")
+        result = await NavigationHarness(timeout_s=1).run_task(
+            NavTask("local-vln", goal),
+            NavigationStack(
+                agent,
+                DummyNavigationEnvironment((goal,), targets=(0,)),
+                vln=DummyVLNNavigator(),
+            ),
+        )
+
+        assert result.terminal.status == "completed"
+        local_event = next(
+            event for event in result.audit if event.name == "vln.navigate.local"
+        )
+        assert local_event.arguments == {"instruction": local_instruction}
+        exposed = {tool["name"]: tool for tool in responses.requests[0]["tools"]}
+        assert "vln__navigate__local" in exposed
+        assert "vln__navigate__task" not in exposed
+        assert not any(
+            name.endswith(("__start", "__status", "__cancel"))
+            for name in exposed
+        )
+        assert "visible" in exposed["vln__navigate__local"]["description"]
+        assert "never as an instruction to copy" in responses.requests[0][
+            "instructions"
+        ]
+
+    run(scenario())
+
+
+def test_normal_agent_requires_fresh_observation_and_local_instruction() -> None:
+    async def scenario() -> None:
+        goal_instruction = "Walk through the bedroom and dining room to the television."
+        visible_instruction = "Move to the visible doorway straight ahead."
+        responses = ScriptedResponses(
+            [
+                [
+                    function_call(
+                        "no-observation",
+                        "vln__navigate__local",
+                        {"instruction": visible_instruction},
+                    )
+                ],
+                [function_call("observe", "nav__observe", {})],
+                [
+                    function_call(
+                        "copied-goal",
+                        "vln__navigate__local",
+                        {"instruction": goal_instruction},
+                    )
+                ],
+                [
+                    function_call(
+                        "valid-local",
+                        "vln__navigate__local",
+                        {"instruction": visible_instruction},
+                    )
+                ],
+                [
+                    function_call(
+                        "stale-observation",
+                        "vln__navigate__local",
+                        {"instruction": visible_instruction},
+                    )
+                ],
+                [
+                    function_call(
+                        "stop",
+                        "nav__stop",
+                        {"status": "completed", "reason": "policy checked"},
+                    )
+                ],
+            ]
+        )
+        agent = NormalAgent(
+            "test-model",
+            ("nav.observe", "vln.navigate.local"),
+            client=SimpleNamespace(responses=responses),
+        )
+        goal = NavGoal("goal", goal_instruction)
+        result = await NavigationHarness(timeout_s=1).run_task(
+            NavTask("local-policy", goal),
+            NavigationStack(
+                agent,
+                DummyNavigationEnvironment((goal,), targets=(0,)),
+                vln=DummyVLNNavigator(),
+            ),
+        )
+
+        assert result.terminal.status == "completed"
+        errors = [
+            json.loads(responses.requests[index]["input"][-1]["output"])["error"]
+            for index in (1, 3, 5)
+        ]
+        assert all(error["type"] == "AgentToolPolicyError" for error in errors)
+        assert "fresh nav.observe" in errors[0]["message"]
+        assert "not copy" in errors[1]["message"]
+        assert "fresh nav.observe" in errors[2]["message"]
+        assert [event.name for event in result.audit].count("vln.navigate.local") == 1
+
+    run(scenario())
+
+
+def test_normal_agent_rejects_nonlocal_vln_surfaces() -> None:
+    for tool in (
+        "vln.navigate.task",
+        "vln.navigate.start",
+        "vln.navigate.status",
+        "vln.navigate.cancel",
+    ):
+        try:
+            NormalAgent("test-model", ("nav.observe", tool))
+        except ValueError as error:
+            assert "only supports blocking local VLN navigation" in str(error)
+        else:
+            raise AssertionError(f"NormalAgent accepted nonlocal VLN tool: {tool}")
+
+    try:
+        NormalAgent("test-model", ("vln.navigate.local",))
+    except ValueError as error:
+        assert "requires nav.observe" in str(error)
+    else:
+        raise AssertionError("NormalAgent accepted local VLN without observation")
 
 
 def test_normal_agent_rejects_mixed_tool_batches_and_recovers() -> None:
