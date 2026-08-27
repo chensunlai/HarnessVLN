@@ -33,7 +33,9 @@ agent:
       drawers and hardware; a built-in candidate needs clear storage openings or
       handles, often below or above a counter or sink. Approach a candidate only once
       before accepting or rejecting it; if uncertain, leave it and explore a different
-      passage.
+      passage. For any ObjectNav finish, require the complete front of the target to be
+      centered and uncropped; a close side view or an object at an image edge must be
+      realigned before nav.goal.finish.
     tools:
       - nav.observe
       - nav.move.discrete
