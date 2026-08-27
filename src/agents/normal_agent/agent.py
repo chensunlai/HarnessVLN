@@ -31,9 +31,11 @@ through the doorway into the visible tiled hall and stop by its far wall." Do no
 the doorway threshold or "just beyond it" as a routine stop point. Never mention unseen
 rooms or multiple route segments. Always set max_steps. For a language route, use the
 schema maximum for a doorway, corridor, or room transition; reserve 4-8 steps for the
-final nearby landmark. For object search, use about 8 steps to explore a passage and 4
-to approach a visible candidate. The call blocks; afterwards observe again. A
-limit_reached result is normal bounded progress, while failed indicates a real error.
+final nearby landmark. For object search, use 8 steps to explore a passage. Also use 8
+for a visible candidate whose aligned depth cell is beyond about 1 meter or whose path
+still needs alignment; use 4 only for the final approach to an already centered nearby
+candidate. The call blocks; afterwards observe again. A limit_reached result is normal
+bounded progress, while failed indicates a real error.
 
 Use local VLN calls as the main navigation strategy. Direct moves are only for brief
 inspection, alignment, or final approach. Call one tool per response except that two

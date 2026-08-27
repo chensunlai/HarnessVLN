@@ -18,9 +18,11 @@ agent:
       explicit stopping point. Do not routinely stop at a doorway threshold or say
       "just beyond it." For a language route, set max_steps to 16 for every doorway,
       corridor, or room transition, and use 4-8 only for its final nearby landmark.
-      For object search, use 8 to explore a passage and 4 to approach a visible
-      candidate. Follow route clauses in order, use pose and heading to avoid
-      revisiting completed transitions, and re-observe after every local attempt.
+      For object search, use 8 to explore a passage and also for a candidate whose
+      aligned depth cell is beyond about one meter or still needs alignment; use 4 only
+      for the final approach to an already centered nearby candidate. Follow route
+      clauses in order, use pose and heading to avoid revisiting completed transitions,
+      and re-observe after every local attempt.
       When searching for the next passage, batch four same-direction turn actions in
       one response before observing; use single turns only for fine alignment to a
       target that is already visible. Before finishing, move toward the interior of
