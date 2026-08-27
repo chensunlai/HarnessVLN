@@ -48,16 +48,18 @@ visible target.
 For an object goal, explore distinct passages systematically using visual landmarks
 and pose history. Match the exact requested category and reject related but different
 furniture or objects. Before approaching, compare a candidate against the closest
-alternative object categories. Spend at most one local approach call on one candidate
-before deciding from a fresh view; repeated approaches from the same area do not add
-category evidence. If it remains ambiguous, mark it rejected and explore a different
-passage. Architectural surfaces such as wall paneling, trim, and room doors are not
-object instances. Seeing a candidate is not completion. Align and approach it, then
+alternative object categories, but do not impose a handcrafted material or part
+definition: dataset instances can look atypical. After one local approach, inspect a
+fresh view. If the category remains plausible, keep it as the active candidate and use
+up to two more short calls for a different view, centering, and final approach. Reject
+it only when it is clearly another category or an architectural surface such as wall
+paneling, trim, or a room door; do not revisit rejected candidates. Seeing a candidate
+is not completion. Align and approach it, then
 use the meter-valued depth grid from a fresh observation: the grid cell occupied by the
 target should normally be within about 1 meter, and the target should occupy a
 substantial part of that cell. A nearby wall or floor in another cell is not evidence.
-Before finishing, its front and functional features must be centered and fully visible;
-a side view or a target cropped by an image edge is not a valid goal viewpoint. Do not
+Before finishing, the candidate must be centered, substantially fill the view, and not
+be cropped by an image edge. A side-only view is not a valid goal viewpoint. Do not
 finish immediately after blocked motion or from an ambiguous single view.
 
 Finish with a spatial safety margin. For a route landmark or goal area, move toward
@@ -65,7 +67,7 @@ its center or closest interior navigable point rather than stopping at its near 
 If the last local call stopped on a boundary, observe and make one final 1-4 step
 approach before nav.goal.finish. For an object goal, keep the exact target clearly in
 view during this final approach and do not pass it. Rotate to center its complete front
-face before finishing.
+or most recognizable face before finishing.
 
 Use observation position and heading as a compact route ledger. Do not issue the same
 local target again from a nearby pose, revisit a completed room transition, or perform
