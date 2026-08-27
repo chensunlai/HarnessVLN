@@ -90,6 +90,7 @@ REASONING_EFFORTS = frozenset(
 )
 OBJECT_CANDIDATE_ATTEMPT_LIMIT = 3
 OBJECT_CANDIDATE_RESET_DISTANCE_M = 0.5
+OBJECT_LOCAL_STEP_LIMIT = 8
 
 
 class AgentToolPolicyError(ValueError):
@@ -180,6 +181,15 @@ class NormalAgent:
 
     async def run(self, context: NavContext) -> None:
         trace_path = "components/agent.events.jsonl"
+        object_category = _object_category(
+            context.task.goal.modality, context.task.goal.public
+        )
+        tool_local_step_cap = _local_step_cap(context.tools.specs)
+        local_step_cap = (
+            min(tool_local_step_cap, OBJECT_LOCAL_STEP_LIMIT)
+            if object_category is not None
+            else tool_local_step_cap
+        )
         context.output.record(
             {
                 "agent": type(self).__name__,
@@ -194,6 +204,7 @@ class NormalAgent:
                 "max_navigation_actions": self.max_navigation_actions,
                 "object_candidate_policy": {
                     "consecutive_attempt_limit": OBJECT_CANDIDATE_ATTEMPT_LIMIT,
+                    "local_step_limit": OBJECT_LOCAL_STEP_LIMIT,
                     "reset_distance_m": OBJECT_CANDIDATE_RESET_DISTANCE_M,
                 },
                 "model_retries": self.model_retries,
@@ -229,12 +240,8 @@ class NormalAgent:
         object_candidate_attempts = 0
         object_candidate_position: tuple[str, float, float, float] | None = None
         latest_position: tuple[str, float, float, float] | None = None
-        object_category = _object_category(
-            context.task.goal.modality, context.task.goal.public
-        )
         require_observation = "nav.observe" in self.required_tools
         require_goal_finish = "nav.goal.finish" in self.required_tools
-        local_step_cap = _local_step_cap(context.tools.specs)
         task_instructions = {_instruction_key(context.task.instruction)}
 
         def trace(event_type: str, **data: Any) -> None:
@@ -475,6 +482,14 @@ class NormalAgent:
                                     object_category = _object_category(
                                         next_goal.get("modality"),
                                         next_goal.get("public"),
+                                    )
+                                    local_step_cap = (
+                                        min(
+                                            tool_local_step_cap,
+                                            OBJECT_LOCAL_STEP_LIMIT,
+                                        )
+                                        if object_category is not None
+                                        else tool_local_step_cap
                                     )
                                     task_instructions.add(
                                         _instruction_key(next_goal.get("instruction"))

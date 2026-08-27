@@ -708,6 +708,102 @@ def test_normal_agent_resets_object_candidate_limit_after_position_progress() ->
     run(scenario())
 
 
+def test_normal_agent_limits_object_local_navigation_to_eight_steps() -> None:
+    async def scenario() -> None:
+        responses = ScriptedResponses(
+            [
+                [function_call("observe", "nav__observe", {})],
+                [
+                    function_call(
+                        "local",
+                        "vln__navigate__local",
+                        {
+                            "instruction": (
+                                "Go through the visible doorway and stop by its far "
+                                "wall."
+                            ),
+                            "max_steps": 16,
+                        },
+                    )
+                ],
+                [
+                    function_call(
+                        "stop",
+                        "nav__stop",
+                        {"status": "failed", "reason": "step guard checked"},
+                    )
+                ],
+            ]
+        )
+        goal = NavGoal(
+            "goal", "Find the cabinet.", "object", {"category": "cabinet"}
+        )
+        result = await NavigationHarness(timeout_s=1).run_task(
+            NavTask("object-step-limit", goal),
+            NavigationStack(
+                NormalAgent(
+                    "test-model",
+                    ("nav.observe", "vln.navigate.local"),
+                    client=SimpleNamespace(responses=responses),
+                ),
+                DummyNavigationEnvironment((goal,), targets=(10,)),
+                vln=DummyVLNNavigator(local_max_steps=16),
+            ),
+        )
+
+        assert result.terminal.status == "failed"
+        assert "vln.navigate.local" not in [event.name for event in result.audit]
+        rejected = json.loads(responses.requests[2]["input"][-1]["output"])
+        assert rejected["error"]["type"] == "AgentToolPolicyError"
+        assert "between 1 and 8" in rejected["error"]["message"]
+
+        route_responses = ScriptedResponses(
+            [
+                [function_call("route-observe", "nav__observe", {})],
+                [
+                    function_call(
+                        "route-local",
+                        "vln__navigate__local",
+                        {
+                            "instruction": (
+                                "Go through the visible doorway and stop by its far "
+                                "wall."
+                            ),
+                            "max_steps": 16,
+                        },
+                    )
+                ],
+                [
+                    function_call(
+                        "route-stop",
+                        "nav__stop",
+                        {"status": "failed", "reason": "route cap checked"},
+                    )
+                ],
+            ]
+        )
+        route_goal = NavGoal("route", "Go to the far room.", "language")
+        route_result = await NavigationHarness(timeout_s=1).run_task(
+            NavTask("route-step-limit", route_goal),
+            NavigationStack(
+                NormalAgent(
+                    "test-model",
+                    ("nav.observe", "vln.navigate.local"),
+                    client=SimpleNamespace(responses=route_responses),
+                ),
+                DummyNavigationEnvironment((route_goal,), targets=(20,)),
+                vln=DummyVLNNavigator(local_max_steps=16),
+            ),
+        )
+
+        assert route_result.environment["position"] == 16
+        assert [event.name for event in route_result.audit].count(
+            "vln.navigate.local"
+        ) == 1
+
+    run(scenario())
+
+
 def test_normal_agent_reports_remaining_navigation_budget() -> None:
     async def scenario() -> None:
         responses = ScriptedResponses(
