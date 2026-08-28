@@ -11,7 +11,14 @@ from harness.components import Component, ComponentContext, DomainComponents, Me
 from harness.errors import ContractError
 from harness.functions import FunctionBus
 from harness.output import ComponentManifest, DomainOutput
-from schemas import JsonObject, NavigationTask, Terminal
+from schemas import (
+    NAV_STOP,
+    JsonObject,
+    NavigationTask,
+    Terminal,
+    nav_stop_input_schema,
+    nav_stop_output_schema,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,10 +72,20 @@ class DomainRuntime:
 
         for component in components.all:
             bus.register(component.name, tuple(component.functions()))
-        if "nav.stop" not in bus.names:
+        if NAV_STOP not in bus.names:
             raise ContractError("environment must provide nav.stop")
-        if bus.owner("nav.stop") != components.environment.name:
+        if bus.owner(NAV_STOP) != components.environment.name:
             raise ContractError("nav.stop must be provided by the environment")
+        stop = bus.definition(NAV_STOP)
+        if (
+            stop.input_schema != nav_stop_input_schema()
+            or stop.output_schema != nav_stop_output_schema()
+            or not stop.mutates
+            or stop.serial_key is None
+        ):
+            raise ContractError(
+                "nav.stop must use the canonical input/output schema and a mutation serial key"
+            )
         bus.seal()
 
         for component in components.all:
@@ -245,7 +262,7 @@ class DomainRuntime:
     ) -> Terminal:
         try:
             value = await system.call(
-                "nav.stop", status=status, reason=reason, actor=actor
+                NAV_STOP, status=status, reason=reason, actor=actor
             )
             if isinstance(value, Terminal):
                 return value

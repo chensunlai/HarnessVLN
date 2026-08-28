@@ -145,6 +145,12 @@ class FunctionBus:
         except KeyError as error:
             raise FunctionNotFoundError(f"unknown function {name!r}") from error
 
+    def definition(self, name: str) -> Function:
+        try:
+            return self._functions[name]
+        except KeyError as error:
+            raise FunctionNotFoundError(f"unknown function {name!r}") from error
+
     def register(self, owner: str, functions: Sequence[Function]) -> None:
         if self._sealed:
             raise ContractError("functions cannot be registered after the bus is sealed")

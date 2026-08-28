@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 
 from harness import ComponentContext, Environment, Function, Terminal
+from schemas import NAV_STOP, nav_stop_input_schema, nav_stop_output_schema
 
 
 _EMPTY = {"type": "object", "additionalProperties": False}
@@ -12,18 +13,6 @@ _MOVE = {
     "required": ["delta"],
     "additionalProperties": False,
 }
-_STOP = {
-    "type": "object",
-    "properties": {
-        "status": {"type": "string", "minLength": 1},
-        "reason": {"type": "string"},
-        "actor": {"type": "string", "minLength": 1},
-    },
-    "required": ["status", "reason", "actor"],
-    "additionalProperties": False,
-}
-
-
 class DummyEnvironment(Environment):
     """A deterministic one-dimensional environment used to validate the framework."""
 
@@ -58,10 +47,11 @@ class DummyEnvironment(Environment):
                 serial_key="environment",
             ),
             Function(
-                "nav.stop",
+                NAV_STOP,
                 "End this environment session.",
                 self._stop,
-                input_schema=_STOP,
+                input_schema=nav_stop_input_schema(),
+                output_schema=nav_stop_output_schema(),
                 mutates=True,
                 serial_key="environment",
             ),

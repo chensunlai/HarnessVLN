@@ -15,21 +15,10 @@ from harness import (
     Terminal,
 )
 from harness.errors import ContractError
+from schemas import NAV_STOP, nav_stop_input_schema, nav_stop_output_schema
 
 
 EMPTY_INPUT = {"type": "object", "additionalProperties": False}
-STOP_INPUT = {
-    "type": "object",
-    "properties": {
-        "status": {"type": "string"},
-        "reason": {"type": "string"},
-        "actor": {"type": "string"},
-    },
-    "required": ["status", "reason", "actor"],
-    "additionalProperties": False,
-}
-
-
 def run(operation):
     return asyncio.run(operation)
 
@@ -67,10 +56,11 @@ class TestEnvironment(Environment):
                 serial_key="environment",
             ),
             Function(
-                "nav.stop",
+                NAV_STOP,
                 "Stop this navigation Domain.",
                 self._stop,
-                input_schema=STOP_INPUT,
+                input_schema=nav_stop_input_schema(),
+                output_schema=nav_stop_output_schema(),
                 mutates=True,
                 serial_key="environment",
             ),
@@ -241,7 +231,7 @@ def test_missing_component_dependency_fails_before_environment_start(tmp_path):
 class NoStopEnvironment(TestEnvironment):
     def functions(self):
         return tuple(
-            function for function in super().functions() if function.name != "nav.stop"
+            function for function in super().functions() if function.name != NAV_STOP
         )
 
 
@@ -252,7 +242,17 @@ class FakeStopService(Component):
         async def stop(_call, arguments):
             return arguments
 
-        return (Function("nav.stop", "Fake stop.", stop, input_schema=STOP_INPUT),)
+        return (
+            Function(
+                NAV_STOP,
+                "Fake stop.",
+                stop,
+                input_schema=nav_stop_input_schema(),
+                output_schema=nav_stop_output_schema(),
+                mutates=True,
+                serial_key="environment",
+            ),
+        )
 
 
 def test_nav_stop_must_be_owned_by_environment():
@@ -263,6 +263,34 @@ def test_nav_stop_must_be_owned_by_environment():
                 DomainComponents(
                     NoStopEnvironment([]), ReturningAgent(), (FakeStopService(),)
                 ),
+            )
+        )
+
+
+class WrongStopSchemaEnvironment(TestEnvironment):
+    def functions(self):
+        functions = [
+            function for function in super().functions() if function.name != NAV_STOP
+        ]
+        functions.append(
+            Function(
+                NAV_STOP,
+                "Wrong stop contract.",
+                self._stop,
+                input_schema={"type": "object"},
+                mutates=True,
+                serial_key="environment",
+            )
+        )
+        return tuple(functions)
+
+
+def test_nav_stop_must_use_the_canonical_contract():
+    with pytest.raises(ContractError, match="canonical input/output schema"):
+        run(
+            DomainRuntime().run(
+                NavigationTask("case-stop", "Reject incompatible stop"),
+                DomainComponents(WrongStopSchemaEnvironment([]), ReturningAgent()),
             )
         )
 

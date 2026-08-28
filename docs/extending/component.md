@@ -54,6 +54,10 @@ class Planner(Component):
 - `Metric.evaluate(terminal, environment)`：读取私有评测能力并返回数值指标。
 - 普通 `Component`：提供函数或管理后台 Job，不获得额外运行时分支。
 
+Environment 的 `nav.stop` 必须使用 `schemas.nav_stop_input_schema()` 与
+`schemas.nav_stop_output_schema()`，声明 `mutates=True` 并设置环境串行键。该固定契约保证
+Agent、Domain 超时和外部取消都能使用完全相同的终止入口。
+
 完整 VLN 应把自己的观测、推理、动作频率和内部状态保留在组件内。推荐向 Agent 提供
 `start/status/cancel` Job 函数，而不是要求 Runner 或 Agent 每个模型 step 调用一次。
 

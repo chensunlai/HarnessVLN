@@ -66,6 +66,18 @@ class DomainComponents:
     services: tuple[Component, ...] = field(default_factory=tuple)
     metrics: tuple[Metric, ...] = field(default_factory=tuple)
 
+    def __post_init__(self) -> None:
+        if not isinstance(self.environment, Environment):
+            raise TypeError("environment must implement Environment")
+        if not isinstance(self.agent, Agent):
+            raise TypeError("agent must implement Agent")
+        if any(not isinstance(component, Component) for component in self.services):
+            raise TypeError("services must contain Component instances")
+        if any(not isinstance(metric, Metric) for metric in self.metrics):
+            raise TypeError("metrics must contain Metric instances")
+        object.__setattr__(self, "services", tuple(self.services))
+        object.__setattr__(self, "metrics", tuple(self.metrics))
+
     @property
     def all(self) -> tuple[Component, ...]:
         return (self.environment, *self.services, *self.metrics, self.agent)

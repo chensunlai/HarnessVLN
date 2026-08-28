@@ -2,7 +2,12 @@ from pathlib import Path
 
 import pytest
 
-from harness.config import load_runner_config
+from harness.config import (
+    AgentConfig,
+    FactorySpec,
+    RunnerConfig,
+    load_runner_config,
+)
 from harness.errors import ContractError
 
 
@@ -30,3 +35,15 @@ def test_runner_config_rejects_unknown_fields(tmp_path):
     )
     with pytest.raises(ContractError, match="unknown fields: unexpected"):
         load_runner_config(path)
+
+
+def test_programmatic_runner_config_rejects_an_empty_worker_pool(tmp_path):
+    with pytest.raises(ContractError, match="at least one worker"):
+        RunnerConfig(
+            agent=AgentConfig(FactorySpec("agents.dummy:DummyAgent")),
+            benches=load_runner_config(
+                ROOT / "config" / "runners" / "dummy.yaml"
+            ).benches,
+            output_dir=tmp_path,
+            workers=(),
+        )

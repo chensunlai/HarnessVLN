@@ -18,7 +18,8 @@ class FactorySpec:
     parameters: JsonObject = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        if ":" not in self.target:
+        module, separator, attribute = self.target.partition(":")
+        if not separator or not module.strip() or not attribute.strip():
             raise ContractError(
                 f"factory target {self.target!r} must use 'module:attribute' syntax"
             )
@@ -32,6 +33,13 @@ class FactorySpec:
 class AgentConfig:
     agent: FactorySpec
     components: tuple[FactorySpec, ...] = ()
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.agent, FactorySpec):
+            raise TypeError("agent must be a FactorySpec")
+        if any(not isinstance(component, FactorySpec) for component in self.components):
+            raise TypeError("components must contain FactorySpec values")
+        object.__setattr__(self, "components", tuple(self.components))
 
     def as_dict(self) -> JsonObject:
         return {
@@ -47,6 +55,17 @@ class BenchConfig:
     environment: FactorySpec
     metrics: tuple[FactorySpec, ...] = ()
 
+    def __post_init__(self) -> None:
+        if not self.config_id.strip():
+            raise ContractError("Bench configuration ID must not be empty")
+        if not isinstance(self.benchmark, FactorySpec):
+            raise TypeError("benchmark must be a FactorySpec")
+        if not isinstance(self.environment, FactorySpec):
+            raise TypeError("environment must be a FactorySpec")
+        if any(not isinstance(metric, FactorySpec) for metric in self.metrics):
+            raise TypeError("metrics must contain FactorySpec values")
+        object.__setattr__(self, "metrics", tuple(self.metrics))
+
     def as_dict(self) -> JsonObject:
         return {
             "id": self.config_id,
@@ -61,6 +80,15 @@ class WorkerConfig:
     name: str
     environment: dict[str, str] = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        if not self.name.strip():
+            raise ContractError("worker name must not be empty")
+        object.__setattr__(
+            self,
+            "environment",
+            {str(name): str(value) for name, value in self.environment.items()},
+        )
+
     def as_dict(self) -> JsonObject:
         return {"name": self.name, "environment": dict(self.environment)}
 
@@ -73,6 +101,26 @@ class RunnerConfig:
     workers: tuple[WorkerConfig, ...]
     timeout_s: float = 300.0
     shutdown_timeout_s: float = 10.0
+
+    def __post_init__(self) -> None:
+        if not self.benches:
+            raise ContractError("RunnerConfig requires at least one Bench")
+        if not self.workers:
+            raise ContractError("RunnerConfig requires at least one worker")
+        if len({bench.config_id for bench in self.benches}) != len(self.benches):
+            raise ContractError("Bench configuration IDs must be unique")
+        if len({worker.name for worker in self.workers}) != len(self.workers):
+            raise ContractError("worker names must be unique")
+        if (
+            self.timeout_s <= 0
+            or self.shutdown_timeout_s <= 0
+            or not math.isfinite(self.timeout_s)
+            or not math.isfinite(self.shutdown_timeout_s)
+        ):
+            raise ContractError("Runner timeouts must be positive finite numbers")
+        object.__setattr__(self, "benches", tuple(self.benches))
+        object.__setattr__(self, "workers", tuple(self.workers))
+        object.__setattr__(self, "output_dir", Path(self.output_dir).expanduser().resolve())
 
     def as_dict(self) -> JsonObject:
         return {
