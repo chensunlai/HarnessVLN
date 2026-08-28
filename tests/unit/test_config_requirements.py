@@ -53,12 +53,12 @@ def test_overlay_replaces_parameters_when_component_factory_changes() -> None:
 
 
 def test_import_path_factory_creates_plugin_without_registry_edit() -> None:
-    spec = ComponentSpec(
-        "agents.passthrough:PassthroughVLNAgent", {"poll_period_s": 0.25}
-    )
+    spec = ComponentSpec("agents.passthrough:PassthroughVLNAgent", {})
     agent = spec.create()
     assert isinstance(agent, PassthroughVLNAgent)
-    assert agent.poll_period_s == 0.25
+    assert agent.required_tools == frozenset(
+        {"vln.navigate.task", "nav.goal.finish"}
+    )
     with pytest.raises(HarnessError, match="cannot load factory"):
         ComponentSpec("missing.module:Factory", {}).create()
 
@@ -67,7 +67,7 @@ def test_component_serial_metadata_is_not_forwarded_to_factory() -> None:
     spec = ComponentSpec.from_config(
         {
             "factory": "agents.passthrough:PassthroughVLNAgent",
-            "params": {"poll_period_s": 0.25},
+            "params": {},
             "serial": True,
             "scope": "task",
         }

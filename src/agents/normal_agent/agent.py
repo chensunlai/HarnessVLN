@@ -4,8 +4,9 @@ import asyncio
 import base64
 import io
 import json
+import re
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -14,31 +15,99 @@ from harness.tool_bus import ToolSpec
 
 
 DEFAULT_INSTRUCTIONS = """You are the decision core of a navigation agent.
-Keep control of the task with tool calls. Delegate the main navigation attempt to a
-VLN tool when one is available; direct atomic moves are only for short inspection or
-correction and must not be the sole task strategy. Call one tool per response except
-that you may emit two to four consecutive nav.move.discrete calls; they execute in
-output order. Never batch observation, VLN, memory, goal-finish, or stop calls.
-Finish each current goal with the goal-finish tool. Finish the complete task only
-with the stop tool. For both tools use status "completed" after success and status
-"failed" after failure; never use "success" as a status. Do not end a turn with
-plain text. For an object-modality goal, after the VLN succeeds, observe the current
-RGB image and use short atomic corrections when needed before finishing the goal.
-Merely seeing the target object is not completion: center it, approach it until it
-is clearly near, and re-observe between action batches before calling goal-finish.
-When a depth summary is present, use its center and 3-by-3 grid together with the
-reported depth metadata to verify proximity; lower normalized values are nearer.
-Before finishing an object goal, attempt a forward correction toward the centered
-candidate and inspect the action's motion.blocked feedback. Low depth at a blocked
-surface does not prove success. A target is centered only when its body occupies the
-middle third of the RGB image. Never finish after a blocked forward action: find a
-new approach angle, then obtain at least two unblocked forward translations with
-fresh observations after the most recent block before considering goal-finish."""
+Keep control of the complete benchmark goal with tool calls. The benchmark instruction
+is the global objective and must never be copied or paraphrased as one VLN instruction.
+
+For a route goal, first turn the global instruction into an ordered mental checklist.
+Advance only the earliest unfinished clause. Never jump to a later landmark merely
+because a similar object is visible; visually confirm that every preceding room, turn,
+and landmark has been traversed before using the final landmark as evidence of arrival.
+
+Before every vln.navigate.local call, use nav.observe and select exactly one continuous
+route segment whose path and stopping region are both visible and traversable in the
+latest RGB/depth observation. Give one short sentence with an explicit stopping point.
+Prefer the farthest distinctive anchor that is clearly reachable along visible free
+space, such as an object, wall, or floor region visible through an opening. Stop at the
+last visible navigable point before any occlusion; never assume a turn, room, waypoint,
+or continuation hidden behind a wall or doorway. Never mention multiple route segments.
+max_steps is only an optional execution watchdog, not the definition of a local route.
+Normally omit it and let the provider watchdog apply; use a smaller value only when a
+nearby final alignment specifically needs one. The call blocks; afterwards observe
+again. A limit_reached result is bounded progress, while failed indicates a real error.
+
+Use local VLN calls as the main navigation strategy. Direct moves are only for brief
+inspection, alignment, or final approach. A response must contain either one non-move
+tool call or an ordered batch of one to four nav.move.discrete calls. When two to four
+consecutive moves are already decided and no intermediate visual evidence is needed,
+you MUST emit every move as a separate function call in the same response, in execution
+order. Never split a known sequence across responses. Emit one move only when the next
+move genuinely depends on its resulting observation. Re-observe after the complete
+movement batch or VLN call. Never batch any other tool.
+
+When searching for the next visible passage or rotating toward a known heading, batch
+the required two to four same-direction turns in one response, then observe once. Never
+emit those already-planned turns one per response. Use pose heading to avoid re-inspecting
+directions; never begin a second circle at the same position, and choose a visible
+passage once useful headings have been checked. Use a single turn only when one turn is
+sufficient or the following turn depends on the new view.
+
+For an object goal, explore distinct passages systematically using visual landmarks
+and pose history. Match the exact requested category and reject related but different
+furniture or objects. Any valid instance of the requested category completes a category
+goal, so never switch from one plausible instance to another instance of the same
+category. Before approaching, compare a candidate against the closest alternative
+object categories, but do not impose a handcrafted material or part definition:
+dataset instances can look atypical. After one local approach, inspect a fresh view. If
+the category remains plausible, keep it as the active candidate and continue short
+calls while each one makes clear pose progress. From essentially the same pose, use at
+most two more calls for a different view, centering, and final approach. Reject it only
+when it is clearly another category or an architectural surface such as wall paneling,
+trim, or a room door; do not revisit rejected candidates.
+Judge the object at the candidate's center, not target-like material around it: an
+appliance framed by cabinet panels remains an appliance. Seeing a candidate is not
+completion. Align and approach it, then use the meter-valued depth grid from a fresh
+observation. Read the grid cell actually occupied by the target; low objects can occupy
+the bottom row, so a different center cell is not evidence. Before finishing, the
+candidate must be close, centered, substantially fill the view, and not be cropped by
+an image edge. State the closest alternative category checked in the finish reason. A
+side-only view is not a valid goal viewpoint. Do not finish immediately after blocked
+motion or from an ambiguous single view.
+
+Finish with a spatial safety margin. For a route landmark or goal area, move toward
+its center or closest interior navigable point rather than stopping at its near edge.
+If the last local call stopped on a boundary, observe and make one final 1-4 step
+approach before nav.goal.finish. For an object goal, keep the exact target clearly in
+view during this final approach and do not pass it. Rotate to center its complete front
+or most recognizable face before finishing.
+
+Use observation position and heading as a compact route ledger. Do not issue the same
+local target again from a nearby pose, revisit a completed room transition, or perform
+repeated full scans at one junction. If progress returns near an earlier pose, choose
+a visibly different unexplored exit. Prefer a few decisive local calls over many short
+calls and inspection turns.
+
+Finish every current goal with nav.goal.finish and inspect its accepted/done result.
+Call nav.stop with status "completed" only after the final goal was accepted and done.
+Use status "failed" for genuine failure; never use "success" as a status. Never end a
+turn with plain text."""
+
+COMMENTARY_INSTRUCTIONS = """Before each tool-calling response, emit one brief
+user-visible commentary message stating the current navigation evidence and immediate
+next action. Keep it to one sentence. Commentary must accompany, never replace, the
+tool call."""
 
 
 REASONING_EFFORTS = frozenset(
     {"none", "minimal", "low", "medium", "high", "xhigh"}
 )
+OBJECT_CANDIDATE_ATTEMPT_LIMIT = 3
+OBJECT_CANDIDATE_RESET_DISTANCE_M = 0.5
+STATIONARY_SCAN_RESET_DISTANCE_M = 0.2
+STATIONARY_TURN_ACTION_LIMIT = 24
+
+
+class AgentToolPolicyError(ValueError):
+    pass
 
 
 class NormalAgent:
@@ -54,7 +123,12 @@ class NormalAgent:
         max_iterations: int = 80,
         max_actions_per_turn: int = 4,
         reasoning_effort: str | None = None,
+        reasoning_summary: bool = False,
+        commentary: bool = False,
         observation_image_detail: str = "high",
+        observation_image_channel: str = "rgb",
+        observation_depth_channel: str = "depth",
+        max_navigation_actions: int = 240,
         model_retries: int = 3,
         retry_backoff_s: float = 2.0,
         client: Any | None = None,
@@ -69,27 +143,73 @@ class NormalAgent:
             raise ValueError("max_actions_per_turn must be between 1 and 4")
         if reasoning_effort is not None and reasoning_effort not in REASONING_EFFORTS:
             raise ValueError(f"unsupported reasoning_effort: {reasoning_effort}")
+        if type(reasoning_summary) is not bool:
+            raise ValueError("reasoning_summary must be a boolean")
+        if type(commentary) is not bool:
+            raise ValueError("commentary must be a boolean")
         if observation_image_detail not in {"low", "high", "auto"}:
             raise ValueError(
                 "observation_image_detail must be low, high, or auto"
             )
+        if (
+            not isinstance(observation_image_channel, str)
+            or not observation_image_channel
+        ):
+            raise ValueError("observation_image_channel must not be empty")
+        if (
+            not isinstance(observation_depth_channel, str)
+            or not observation_depth_channel
+        ):
+            raise ValueError("observation_depth_channel must not be empty")
+        if type(max_navigation_actions) is not int or max_navigation_actions <= 0:
+            raise ValueError("max_navigation_actions must be positive")
         if model_retries < 0:
             raise ValueError("model_retries must not be negative")
         if retry_backoff_s < 0:
             raise ValueError("retry_backoff_s must not be negative")
         self.model = model
         self.instructions = _join_instructions(instructions, guidance)
+        if commentary:
+            self.instructions = _join_instructions(
+                self.instructions, COMMENTARY_INSTRUCTIONS
+            )
         self.max_iterations = max_iterations
         self.max_actions_per_turn = max_actions_per_turn
         self.reasoning_effort = reasoning_effort
+        self.reasoning_summary = reasoning_summary
+        self.commentary = commentary
         self.observation_image_detail = observation_image_detail
+        self.observation_image_channel = observation_image_channel
+        self.observation_depth_channel = observation_depth_channel
+        self.max_navigation_actions = max_navigation_actions
         self.model_retries = model_retries
         self.retry_backoff_s = retry_backoff_s
         self.required_tools = frozenset(tools)
+        forbidden_vln_tools = self.required_tools & {
+            "vln.navigate.task",
+            "vln.navigate.start",
+            "vln.navigate.status",
+            "vln.navigate.cancel",
+        }
+        if forbidden_vln_tools:
+            names = ", ".join(sorted(forbidden_vln_tools))
+            raise ValueError(
+                "NormalAgent only supports blocking local VLN navigation; "
+                f"remove: {names}"
+            )
+        if (
+            "vln.navigate.local" in self.required_tools
+            and "nav.observe" not in self.required_tools
+        ):
+            raise ValueError("vln.navigate.local requires nav.observe")
         self._client = client
 
     async def run(self, context: NavContext) -> None:
         trace_path = "components/agent.events.jsonl"
+        object_category = _object_category(
+            context.task.goal.modality, context.task.goal.public
+        )
+        local_step_cap = _local_step_cap(context.tools.specs)
         context.output.record(
             {
                 "agent": type(self).__name__,
@@ -98,7 +218,18 @@ class NormalAgent:
                 "max_iterations": self.max_iterations,
                 "max_actions_per_turn": self.max_actions_per_turn,
                 "reasoning_effort": self.reasoning_effort,
+                "reasoning_summary": self.reasoning_summary,
+                "commentary": self.commentary,
                 "observation_image_detail": self.observation_image_detail,
+                "observation_image_channel": self.observation_image_channel,
+                "observation_depth_channel": self.observation_depth_channel,
+                "max_navigation_actions": self.max_navigation_actions,
+                "local_vln_watchdog_max_steps": local_step_cap or None,
+                "stationary_turn_action_limit": STATIONARY_TURN_ACTION_LIMIT,
+                "object_candidate_policy": {
+                    "consecutive_attempt_limit": OBJECT_CANDIDATE_ATTEMPT_LIMIT,
+                    "reset_distance_m": OBJECT_CANDIDATE_RESET_DISTANCE_M,
+                },
                 "model_retries": self.model_retries,
                 "retry_backoff_s": self.retry_backoff_s,
                 "required_tools": sorted(self.required_tools),
@@ -112,12 +243,31 @@ class NormalAgent:
         model_tools, tool_names = _responses_tools(context.tools.specs)
         initial_input = {
             "role": "user",
-            "content": "Navigate this task:\n" + _json(_task_data(context)),
+            "content": "Navigate this task:\n"
+            + _json(
+                {
+                    **_task_data(context),
+                    "limits": {
+                        "navigation_actions": self.max_navigation_actions,
+                    },
+                }
+            ),
         }
         input_items: list[Any] = [initial_input]
         trace_sequence = 0
         response_count = 0
         usage: dict[str, int] = {}
+        fresh_observation = False
+        navigation_actions = 0
+        final_goal_accepted = False
+        object_candidate_attempts = 0
+        object_candidate_position: tuple[str, float, float, float] | None = None
+        latest_position: tuple[str, float, float, float] | None = None
+        stationary_turn_actions = 0
+        stationary_turn_position: tuple[str, float, float, float] | None = None
+        require_observation = "nav.observe" in self.required_tools
+        require_goal_finish = "nav.goal.finish" in self.required_tools
+        task_instructions = {_instruction_key(context.task.instruction)}
 
         def trace(event_type: str, **data: Any) -> None:
             nonlocal trace_sequence
@@ -155,8 +305,13 @@ class NormalAgent:
                     "parallel_tool_calls": self.max_actions_per_turn > 1,
                     "store": False,
                 }
-                if self.reasoning_effort is not None:
-                    request["reasoning"] = {"effort": self.reasoning_effort}
+                if self.reasoning_effort is not None or self.reasoning_summary:
+                    reasoning: dict[str, str] = {}
+                    if self.reasoning_effort is not None:
+                        reasoning["effort"] = self.reasoning_effort
+                    if self.reasoning_summary:
+                        reasoning["summary"] = "auto"
+                    request["reasoning"] = reasoning
                 trace(
                     "model.request",
                     iteration=iteration,
@@ -198,6 +353,21 @@ class NormalAgent:
 
                 output = list(response.output)
                 input_items.extend(output)
+                if self.reasoning_summary:
+                    summary = _reasoning_summary_text(output)
+                    if summary:
+                        trace(
+                            "model.reasoning_summary",
+                            iteration=iteration,
+                            text=summary,
+                        )
+                if self.commentary:
+                    for message in _commentary_messages(output):
+                        trace(
+                            "model.commentary",
+                            iteration=iteration,
+                            **message,
+                        )
                 calls = [item for item in output if item.type == "function_call"]
                 if not calls:
                     trace(
@@ -214,11 +384,33 @@ class NormalAgent:
                 batch_error = _batch_error(
                     calls, tool_names, maximum=self.max_actions_per_turn
                 )
+                canonical_calls = [tool_names.get(call.name) for call in calls]
+                if batch_error is None and all(
+                    name == "nav.move.discrete" for name in canonical_calls
+                ):
+                    if require_observation and not fresh_observation:
+                        batch_error = (
+                            "nav.move.discrete requires a fresh nav.observe before "
+                            "the movement batch"
+                        )
+                    elif navigation_actions + len(calls) > self.max_navigation_actions:
+                        batch_error = (
+                            "movement batch exceeds the remaining navigation action "
+                            "budget: "
+                            f"{self.max_navigation_actions - navigation_actions}"
+                        )
+                skip_remaining_moves: str | None = None
                 for call in calls:
                     canonical_name: str | None = tool_names.get(call.name)
                     arguments: Any = call.arguments
+                    compact_images = False
+                    local_is_object_candidate = False
                     if batch_error is not None:
                         tool_output = _error_output("ToolBatchError", batch_error)
+                    elif skip_remaining_moves is not None:
+                        tool_output = _error_output(
+                            "ToolBatchSkipped", skip_remaining_moves
+                        )
                     else:
                         try:
                             if canonical_name is None:
@@ -229,16 +421,186 @@ class NormalAgent:
                             arguments = _normalize_tool_arguments(
                                 canonical_name, arguments
                             )
+                            if canonical_name == "nav.move.discrete":
+                                action = arguments.get("action")
+                                if (
+                                    action in {"turn_left", "turn_right"}
+                                    and stationary_turn_actions
+                                    >= STATIONARY_TURN_ACTION_LIMIT
+                                ):
+                                    raise AgentToolPolicyError(
+                                        "stationary scan limit reached; move toward a "
+                                        "visible passage before scanning this position "
+                                        "again"
+                                    )
+                            if canonical_name == "vln.navigate.local":
+                                if not fresh_observation:
+                                    raise AgentToolPolicyError(
+                                        "vln.navigate.local requires a fresh "
+                                        "nav.observe after the most recent movement "
+                                        "or VLN call"
+                                    )
+                                requested_steps = _validate_local_instruction(
+                                    arguments,
+                                    task_instructions,
+                                    maximum=local_step_cap,
+                                )
+                                remaining_steps = (
+                                    self.max_navigation_actions - navigation_actions
+                                )
+                                if remaining_steps <= 0:
+                                    raise AgentToolPolicyError(
+                                        "navigation action budget is exhausted"
+                                    )
+                                requested_steps = min(
+                                    requested_steps, remaining_steps
+                                )
+                                arguments["max_steps"] = requested_steps
+                                local_is_object_candidate = (
+                                    _mentions_object_category(
+                                        arguments["instruction"], object_category
+                                    )
+                                )
+                                if local_is_object_candidate and _positions_separated(
+                                    latest_position,
+                                    object_candidate_position,
+                                    minimum_m=OBJECT_CANDIDATE_RESET_DISTANCE_M,
+                                ):
+                                    object_candidate_attempts = 0
+                                _validate_object_candidate_repetition(
+                                    arguments["instruction"],
+                                    category=object_category,
+                                    attempts=object_candidate_attempts,
+                                )
+                                fresh_observation = False
+                                compact_images = True
+                            elif canonical_name == "nav.goal.finish":
+                                if (
+                                    arguments.get("status") == "completed"
+                                    and require_observation
+                                    and not fresh_observation
+                                ):
+                                    raise AgentToolPolicyError(
+                                        "nav.goal.finish requires a fresh nav.observe "
+                                        "after the most recent movement or VLN call"
+                                    )
+                            elif canonical_name == "nav.stop":
+                                if (
+                                    arguments.get("status") == "completed"
+                                    and require_goal_finish
+                                    and not final_goal_accepted
+                                ):
+                                    raise AgentToolPolicyError(
+                                        "nav.stop completed requires an accepted final "
+                                        "nav.goal.finish result"
+                                    )
                             result = await context.tools.call(canonical_name, arguments)
+                            if canonical_name == "nav.observe":
+                                fresh_observation = True
+                                compact_images = True
+                                latest_position = _observation_position(result)
+                                if _positions_separated(
+                                    latest_position,
+                                    stationary_turn_position,
+                                    minimum_m=STATIONARY_SCAN_RESET_DISTANCE_M,
+                                ):
+                                    stationary_turn_actions = 0
+                                    stationary_turn_position = None
+                            elif canonical_name == "nav.move.discrete":
+                                fresh_observation = False
+                                navigation_actions += 1
+                                compact_images = True
+                                stop_reason = _move_batch_stop_reason(result)
+                                action = arguments.get("action")
+                                if action in {"turn_left", "turn_right"}:
+                                    stationary_turn_actions += 1
+                                    if stationary_turn_position is None:
+                                        stationary_turn_position = latest_position
+                                elif action != "stand_still" and stop_reason is None:
+                                    stationary_turn_actions = 0
+                                    stationary_turn_position = None
+                                if stop_reason is not None:
+                                    skip_remaining_moves = stop_reason
+                            elif canonical_name == "vln.navigate.local":
+                                navigation_actions += _navigation_steps(
+                                    result, requested_steps
+                                )
+                                if local_is_object_candidate:
+                                    object_candidate_attempts += 1
+                                    object_candidate_position = latest_position
+                                else:
+                                    object_candidate_attempts = 0
+                                    object_candidate_position = None
+                                stationary_turn_actions = 0
+                                stationary_turn_position = None
+                            elif canonical_name == "nav.goal.finish":
+                                fresh_observation = False
+                                compact_images = True
+                                final_goal_accepted = bool(
+                                    isinstance(result, Mapping)
+                                    and result.get("accepted") is True
+                                    and result.get("done") is True
+                                )
+                                next_goal = (
+                                    result.get("goal")
+                                    if isinstance(result, Mapping)
+                                    else None
+                                )
+                                if isinstance(next_goal, Mapping):
+                                    final_goal_accepted = False
+                                    object_candidate_attempts = 0
+                                    object_candidate_position = None
+                                    latest_position = None
+                                    stationary_turn_actions = 0
+                                    stationary_turn_position = None
+                                    object_category = _object_category(
+                                        next_goal.get("modality"),
+                                        next_goal.get("public"),
+                                    )
+                                    task_instructions.add(
+                                        _instruction_key(next_goal.get("instruction"))
+                                    )
+                            elif canonical_name == "nav.stop":
+                                compact_images = True
                             tool_output = {"ok": True, "result": result}
+                            if canonical_name in {
+                                "nav.move.discrete",
+                                "vln.navigate.local",
+                            }:
+                                tool_output["navigation_budget"] = {
+                                    "used": navigation_actions,
+                                    "remaining": self.max_navigation_actions
+                                    - navigation_actions,
+                                }
                         except Exception as error:
-                            tool_output = _error_output(type(error).__name__, str(error))
+                            tool_output = _error_output(
+                                type(error).__name__, str(error)
+                            )
 
+                    if compact_images:
+                        input_items = _compact_observation_images(input_items)
+
+                    image_channel = _observation_channel(
+                        canonical_name,
+                        tool_output,
+                        preferred=self.observation_image_channel,
+                        fallback="rgb",
+                        validator=_is_rgb_image,
+                    )
+                    depth_channel = _observation_channel(
+                        canonical_name,
+                        tool_output,
+                        preferred=self.observation_depth_channel,
+                        fallback="depth",
+                        validator=_is_depth_image,
+                    )
                     model_input = _function_call_output(
                         call.call_id,
                         canonical_name,
                         tool_output,
                         image_detail=self.observation_image_detail,
+                        image_channel=image_channel,
+                        depth_channel=depth_channel,
                     )
                     input_items.append(model_input)
                     trace(
@@ -249,7 +611,9 @@ class NormalAgent:
                         tool_name=canonical_name,
                         arguments=arguments,
                         output=_trace_data(tool_output),
-                        model_input=_trace_model_input(model_input),
+                        model_input=_trace_model_input(
+                            model_input, image_channel=image_channel
+                        ),
                     )
                     if canonical_name == "nav.stop" and tool_output["ok"]:
                         trace(
@@ -273,6 +637,7 @@ class NormalAgent:
                     "model_responses": response_count,
                     "usage": usage,
                     "trace_events": trace_sequence,
+                    "navigation_actions": navigation_actions,
                 }
             )
 
@@ -311,6 +676,176 @@ def _batch_error(
     if any(name != "nav.move.discrete" for name in canonical_names):
         return "only consecutive nav.move.discrete calls may be batched"
     return None
+
+
+def _local_step_cap(specs: Sequence[ToolSpec]) -> int:
+    for spec in specs:
+        if spec.name != "vln.navigate.local":
+            continue
+        properties = spec.input_schema.get("properties")
+        max_steps = (
+            properties.get("max_steps")
+            if isinstance(properties, Mapping)
+            else None
+        )
+        maximum = max_steps.get("maximum") if isinstance(max_steps, Mapping) else None
+        if type(maximum) is not int or maximum <= 0:
+            raise ValueError(
+                "vln.navigate.local must expose a positive max_steps maximum"
+            )
+        return maximum
+    return 0
+
+
+def _validate_local_instruction(
+    arguments: Mapping[str, Any],
+    task_instructions: set[str],
+    *,
+    maximum: int,
+) -> int:
+    instruction = arguments.get("instruction")
+    if not isinstance(instruction, str):
+        raise AgentToolPolicyError("local VLN instruction must be a string")
+    normalized = _instruction_key(instruction)
+    if normalized in task_instructions:
+        raise AgentToolPolicyError(
+            "a local VLN instruction must describe one target visible in the latest "
+            "observation, not copy the current benchmark goal"
+        )
+    if len(instruction) > 180:
+        raise AgentToolPolicyError(
+            "local VLN instruction must not exceed 180 characters"
+        )
+    if "\n" in instruction or ";" in instruction or re.search(
+        r"\b(?:then|afterwards|subsequently)\b", normalized
+    ):
+        raise AgentToolPolicyError(
+            "local VLN instruction must contain one visible route segment"
+        )
+    if len(re.findall(r"[.!?]+", instruction.strip())) > 1:
+        raise AgentToolPolicyError("local VLN instruction must be one sentence")
+    if re.search(r"\b(?:stop|stopping)\b", normalized) is None:
+        raise AgentToolPolicyError(
+            "local VLN instruction must state where to stop at the visible target"
+        )
+    max_steps = arguments.get("max_steps", maximum)
+    if type(max_steps) is not int or not 1 <= max_steps <= maximum:
+        raise AgentToolPolicyError(
+            f"local max_steps must be an integer between 1 and {maximum}"
+        )
+    return max_steps
+
+
+def _navigation_steps(result: Any, requested: int) -> int:
+    steps = result.get("steps") if isinstance(result, Mapping) else None
+    return steps if type(steps) is int and 0 <= steps <= requested else requested
+
+
+def _move_batch_stop_reason(result: Any) -> str | None:
+    if not isinstance(result, Mapping):
+        return None
+    if result.get("native_terminal") is True:
+        return "environment reached a native terminal state; remaining moves skipped"
+    motion = result.get("motion")
+    if isinstance(motion, Mapping) and motion.get("blocked") is True:
+        return (
+            "movement was blocked; remaining moves skipped, observe before replanning"
+        )
+    return None
+
+
+def _object_category(modality: Any, public: Any) -> str | None:
+    if modality != "object" or not isinstance(public, Mapping):
+        return None
+    category = public.get("category")
+    if not isinstance(category, str) or not category.strip():
+        return None
+    return " ".join(category.replace("_", " ").split()).casefold()
+
+
+def _mentions_object_category(instruction: str, category: str | None) -> bool:
+    if category is None:
+        return False
+    normalized = _instruction_key(instruction.replace("_", " "))
+    return all(
+        re.search(rf"\b{re.escape(term)}s?\b", normalized) is not None
+        for term in category.split()
+    )
+
+
+def _validate_object_candidate_repetition(
+    instruction: str,
+    *,
+    category: str | None,
+    attempts: int,
+) -> None:
+    if not _mentions_object_category(instruction, category):
+        return
+    if attempts >= OBJECT_CANDIDATE_ATTEMPT_LIMIT:
+        raise AgentToolPolicyError(
+            "consecutive object candidate retry limit reached; use the fresh "
+            "observation to finish the verified candidate or choose a different "
+            "visible passage"
+        )
+
+
+def _observation_position(
+    observation: Any,
+) -> tuple[str, float, float, float] | None:
+    if not isinstance(observation, Mapping):
+        return None
+    pose = observation.get("pose")
+    if not isinstance(pose, Mapping):
+        channels = observation.get("channels")
+        pose = channels.get("pose") if isinstance(channels, Mapping) else None
+    if not isinstance(pose, Mapping):
+        return None
+    frame = pose.get("frame")
+    coordinates = (pose.get("x"), pose.get("y"), pose.get("z", 0.0))
+    if not isinstance(frame, str) or not frame or any(
+        not isinstance(value, (int, float)) or isinstance(value, bool)
+        for value in coordinates
+    ):
+        return None
+    return frame, *(float(value) for value in coordinates)
+
+
+def _positions_separated(
+    current: tuple[str, float, float, float] | None,
+    previous: tuple[str, float, float, float] | None,
+    *,
+    minimum_m: float,
+) -> bool:
+    if current is None or previous is None:
+        return False
+    if current[0] != previous[0]:
+        return True
+    squared_distance = sum(
+        (current[index] - previous[index]) ** 2 for index in range(1, 4)
+    )
+    return squared_distance >= minimum_m**2
+
+
+def _compact_observation_images(items: Sequence[Any]) -> list[Any]:
+    compacted = list(items)
+    for index, item in enumerate(compacted):
+        if not isinstance(item, Mapping) or item.get("type") != "function_call_output":
+            continue
+        output = item.get("output")
+        if not isinstance(output, list) or not any(
+            isinstance(part, Mapping) and part.get("type") == "input_image"
+            for part in output
+        ):
+            continue
+        compacted[index] = {
+            **dict(item),
+            "output": [
+                dict(part)
+                for part in output
+                if isinstance(part, Mapping) and part.get("type") != "input_image"
+            ],
+        }
+    return compacted
 
 
 def _join_instructions(instructions: str, guidance: str) -> str:
@@ -354,15 +889,23 @@ def _normalize_tool_arguments(
     return arguments
 
 
+def _instruction_key(value: Any) -> str:
+    return " ".join(value.split()).casefold() if isinstance(value, str) else ""
+
+
 def _function_call_output(
     call_id: str,
     tool_name: str | None,
     tool_output: dict[str, Any],
     *,
     image_detail: str,
+    image_channel: str | None,
+    depth_channel: str | None,
 ) -> dict[str, Any]:
-    output: Any = _json(_model_tool_output(tool_name, tool_output))
-    image_url = _observation_image_url(tool_name, tool_output)
+    output: Any = _json(
+        _model_tool_output(tool_name, tool_output, depth_channel=depth_channel)
+    )
+    image_url = _observation_image_url(tool_name, tool_output, image_channel)
     if image_url is not None:
         output = [
             {"type": "input_text", "text": output},
@@ -379,7 +922,9 @@ def _function_call_output(
     }
 
 
-def _trace_model_input(value: Mapping[str, Any]) -> dict[str, Any]:
+def _trace_model_input(
+    value: Mapping[str, Any], *, image_channel: str | None
+) -> dict[str, Any]:
     """Keep model-facing feedback while representing inline images compactly."""
     result = _trace_data(value)
     output = result.get("output")
@@ -393,7 +938,7 @@ def _trace_model_input(value: Mapping[str, Any]) -> dict[str, Any]:
             continue
         header, _, payload = image_url.partition(",")
         item["image_url"] = {
-            "source": "nav.observe.channels.rgb",
+            "source": f"nav.observe.channels.{image_channel}",
             "media_type": header.removeprefix("data:").split(";", 1)[0],
             "encoded_bytes": len(payload),
         }
@@ -432,6 +977,53 @@ def _trace_data(value: Any) -> Any:
     return {"type": type(value).__name__}
 
 
+def _reasoning_summary_text(output: Sequence[Any]) -> str:
+    parts: list[str] = []
+    for item in output:
+        item_data = _trace_data(item)
+        if not isinstance(item_data, Mapping) or item_data.get("type") != "reasoning":
+            continue
+        summary = item_data.get("summary")
+        if not isinstance(summary, Sequence) or isinstance(
+            summary, (str, bytes, bytearray)
+        ):
+            continue
+        parts.extend(_output_text_parts(summary, "summary_text"))
+    return "\n".join(parts)
+
+
+def _commentary_messages(output: Sequence[Any]) -> list[dict[str, Any]]:
+    messages: list[dict[str, Any]] = []
+    for item in output:
+        item_data = _trace_data(item)
+        if not isinstance(item_data, Mapping) or item_data.get("type") != "message":
+            continue
+        phase = item_data.get("phase")
+        if phase not in {None, "commentary"}:
+            continue
+        content = item_data.get("content")
+        if not isinstance(content, Sequence) or isinstance(
+            content, (str, bytes, bytearray)
+        ):
+            continue
+        text = "\n".join(_output_text_parts(content, "output_text"))
+        if text:
+            messages.append({"phase": phase or "commentary", "text": text})
+    return messages
+
+
+def _output_text_parts(parts: Sequence[Any], part_type: str) -> list[str]:
+    text: list[str] = []
+    for part in parts:
+        part_data = _trace_data(part)
+        if not isinstance(part_data, Mapping) or part_data.get("type") != part_type:
+            continue
+        value = part_data.get("text")
+        if isinstance(value, str) and value:
+            text.append(value)
+    return text
+
+
 def _accumulate_usage(total: dict[str, int], response: Any) -> None:
     if not isinstance(response, Mapping):
         return
@@ -445,7 +1037,10 @@ def _accumulate_usage(total: dict[str, int], response: Any) -> None:
 
 
 def _model_tool_output(
-    tool_name: str | None, tool_output: Mapping[str, Any]
+    tool_name: str | None,
+    tool_output: Mapping[str, Any],
+    *,
+    depth_channel: str | None,
 ) -> dict[str, Any]:
     value = dict(tool_output)
     if tool_name != "nav.observe" or tool_output.get("ok") is not True:
@@ -456,13 +1051,19 @@ def _model_tool_output(
     channels = result.get("channels")
     if not isinstance(channels, Mapping):
         return value
-    depth_summary = _depth_summary(channels.get("depth"))
+    depth_summary = _depth_summary(
+        channels.get(depth_channel) if depth_channel is not None else None,
+        channels.get("depth_metadata"),
+    )
     if depth_summary is not None:
-        value["sensor_summary"] = {"depth": depth_summary}
+        value["sensor_summary"] = {
+            "depth": depth_summary,
+            "depth_channel": depth_channel,
+        }
     return value
 
 
-def _depth_summary(depth: Any) -> dict[str, Any] | None:
+def _depth_summary(depth: Any, metadata: Any = None) -> dict[str, Any] | None:
     shape = tuple(getattr(depth, "shape", ()))
     if len(shape) == 3 and shape[2] == 1:
         depth = depth[:, :, 0]
@@ -491,13 +1092,51 @@ def _depth_summary(depth: Any) -> dict[str, Any] | None:
             ]
             cells.append(_finite_median(cell))
         grid.append(cells)
-    return {
+    summary = {
         "center": _finite_median(center),
         "grid": grid,
         "minimum": round(float(finite.min()), 4),
         "maximum": round(float(finite.max()), 4),
         "lower_is_nearer": True,
     }
+    metric_range = _depth_metric_range(metadata)
+    if metric_range is not None:
+        minimum_m, maximum_m = metric_range
+        summary["meters"] = {
+            "center": _to_meters(summary["center"], minimum_m, maximum_m),
+            "grid": [
+                [_to_meters(value, minimum_m, maximum_m) for value in row]
+                for row in grid
+            ],
+            "sensor_range": [minimum_m, maximum_m],
+        }
+    return summary
+
+
+def _depth_metric_range(metadata: Any) -> tuple[float, float] | None:
+    if not isinstance(metadata, Mapping):
+        return None
+    if metadata.get("encoding") != "linear_normalized":
+        return None
+    minimum = metadata.get("minimum_m")
+    maximum = metadata.get("maximum_m")
+    if (
+        not isinstance(minimum, (int, float))
+        or isinstance(minimum, bool)
+        or not isinstance(maximum, (int, float))
+        or isinstance(maximum, bool)
+        or float(minimum) >= float(maximum)
+    ):
+        return None
+    return float(minimum), float(maximum)
+
+
+def _to_meters(
+    value: float | None, minimum_m: float, maximum_m: float
+) -> float | None:
+    if value is None:
+        return None
+    return round(minimum_m + value * (maximum_m - minimum_m), 4)
 
 
 def _finite_median(values: Any) -> float | None:
@@ -509,8 +1148,13 @@ def _finite_median(values: Any) -> float | None:
     return round(float(np.median(finite)), 4)
 
 
-def _observation_image_url(
-    tool_name: str | None, tool_output: Mapping[str, Any]
+def _observation_channel(
+    tool_name: str | None,
+    tool_output: Mapping[str, Any],
+    *,
+    preferred: str,
+    fallback: str,
+    validator: Callable[[Any], bool],
 ) -> str | None:
     if tool_name != "nav.observe" or tool_output.get("ok") is not True:
         return None
@@ -520,13 +1164,31 @@ def _observation_image_url(
     channels = result.get("channels")
     if not isinstance(channels, Mapping):
         return None
-    rgb = channels.get("rgb")
-    if rgb is None:
+    for channel in dict.fromkeys((preferred, fallback)):
+        if validator(channels.get(channel)):
+            return channel
+    return None
+
+
+def _observation_image_url(
+    tool_name: str | None,
+    tool_output: Mapping[str, Any],
+    image_channel: str | None,
+) -> str | None:
+    if (
+        tool_name != "nav.observe"
+        or tool_output.get("ok") is not True
+        or image_channel is None
+    ):
         return None
-    shape = tuple(getattr(rgb, "shape", ()))
-    if len(shape) != 3 or shape[2] not in {3, 4} or min(shape) <= 0:
+    result = tool_output.get("result")
+    if not isinstance(result, Mapping):
         return None
-    if str(getattr(rgb, "dtype", "")) != "uint8":
+    channels = result.get("channels")
+    if not isinstance(channels, Mapping):
+        return None
+    rgb = channels.get(image_channel)
+    if not _is_rgb_image(rgb):
         return None
     from PIL import Image
 
@@ -535,6 +1197,24 @@ def _observation_image_url(
     image.save(encoded, format="JPEG", quality=80, optimize=True)
     payload = base64.b64encode(encoded.getvalue()).decode("ascii")
     return f"data:image/jpeg;base64,{payload}"
+
+
+def _is_rgb_image(value: Any) -> bool:
+    shape = tuple(getattr(value, "shape", ()))
+    return (
+        len(shape) == 3
+        and shape[2] in {3, 4}
+        and min(shape) > 0
+        and str(getattr(value, "dtype", "")) == "uint8"
+    )
+
+
+def _is_depth_image(value: Any) -> bool:
+    shape = tuple(getattr(value, "shape", ()))
+    return (
+        (len(shape) == 2 or (len(shape) == 3 and shape[2] == 1))
+        and min(shape) > 0
+    )
 
 
 def _responses_tools(

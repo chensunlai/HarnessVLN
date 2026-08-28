@@ -11,6 +11,7 @@ from vln.dualvln.worker import (
     DualVLNBackend,
     NativeDualPolicy,
     _require_action,
+    _require_rgbd,
     _restore_diffusers_gradient_checkpointing,
     build_model_settings,
 )
@@ -84,12 +85,16 @@ def test_dual_backend_preserves_agent_state_and_maps_discrete_actions() -> None:
     tools = Tools()
     load(backend)
 
-    assert backend.navigate("go to the chair", {}, tools, threading.Event()) == (
-        "model emitted STOP"
-    )
-    assert backend.navigate("next goal", {}, tools, threading.Event()) == (
-        "model emitted STOP"
-    )
+    assert backend.navigate("go to the chair", {}, tools, threading.Event()) == {
+        "state": "succeeded",
+        "steps": 4,
+        "reason": "model emitted STOP",
+    }
+    assert backend.navigate("next goal", {}, tools, threading.Event()) == {
+        "state": "succeeded",
+        "steps": 0,
+        "reason": "model emitted STOP",
+    }
     backend.close()
 
     assert tools.moves == ["stand_still", "forward", "turn_left", "turn_right"]
@@ -119,16 +124,23 @@ def test_dual_cancel_after_inference_fences_motion() -> None:
     tools = Tools()
     load(backend)
 
-    assert backend.navigate("go", {}, tools, cancelled) == "cancelled"
+    assert backend.navigate("go", {}, tools, cancelled) == {
+        "state": "cancelled",
+        "steps": 0,
+        "reason": "job cancelled",
+    }
     assert tools.moves == []
 
 
-def test_dual_step_limits_are_bounded_and_fail_the_job() -> None:
+def test_dual_step_limits_are_bounded_and_report_normal_completion() -> None:
     backend = DualVLNBackend(Policy([output(1), output(1)]))
     load(backend, max_steps=2)
 
-    with pytest.raises(RuntimeError, match="exceeded maximum step count: 1"):
-        backend.navigate("go", {"max_steps": 1}, Tools(), threading.Event())
+    assert backend.navigate("go", {"max_steps": 1}, Tools(), threading.Event()) == {
+        "state": "limit_reached",
+        "steps": 1,
+        "reason": "step limit reached: 1",
+    }
     with pytest.raises(ValueError, match="exceeds worker limit"):
         backend.navigate("go", {"max_steps": 3}, Tools(), threading.Event())
 
@@ -182,6 +194,43 @@ def test_dual_rejects_incompatible_observations(channels, message) -> None:
         backend.navigate(
             "go", {}, Tools([{"channels": channels}]), threading.Event()
         )
+
+
+def test_dual_converts_environment_depth_range_to_model_normalization() -> None:
+    depth = np.array([[[0.0], [0.5], [1.0]]], dtype=np.float32)
+    observation = {
+        "channels": {
+            "rgb": np.zeros((1, 3, 3), dtype=np.uint8),
+            "depth": depth,
+            "depth_metadata": {
+                "encoding": "linear_normalized",
+                "minimum_m": 0.5,
+                "maximum_m": 5.0,
+            },
+        }
+    }
+
+    _, converted = _require_rgbd(observation, 1, 3)
+
+    assert converted.dtype == np.float32
+    assert converted is not depth
+    np.testing.assert_allclose(converted[:, :, 0], [[0.05, 0.275, 0.5]])
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {"encoding": "metric", "minimum_m": 0.5, "maximum_m": 5.0},
+        {"encoding": "linear_normalized", "minimum_m": 5.0, "maximum_m": 0.5},
+        {"encoding": "linear_normalized", "minimum_m": 0.0, "maximum_m": 12.0},
+    ],
+)
+def test_dual_rejects_unsupported_depth_metadata(metadata) -> None:
+    observation = rgbd()
+    observation["channels"]["depth_metadata"] = metadata
+
+    with pytest.raises(ValueError, match="depth"):
+        _require_rgbd(observation, 480, 640)
 
 
 def test_dual_model_settings_keep_checkpoint_and_policy_authoritative() -> None:

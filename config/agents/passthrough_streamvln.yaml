@@ -1,7 +1,5 @@
 extends: passthrough.yaml
 agent:
-  params:
-    poll_period_s: 1.0
   vln: ../vln/streamvln.yaml
 provenance:
   combination: passthrough-streamvln

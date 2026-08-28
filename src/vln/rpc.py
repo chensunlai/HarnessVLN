@@ -619,7 +619,9 @@ class RPCVLNNavigator:
     required_tools: frozenset[str] = frozenset()
     requirements: dict[str, Any] = {}
     _active_states = frozenset({"running", "cancelling"})
-    _terminal_states = frozenset({"succeeded", "cancelled", "failed"})
+    _terminal_states = frozenset(
+        {"succeeded", "limit_reached", "cancelled", "failed"}
+    )
 
     def __init__(
         self,
@@ -631,7 +633,13 @@ class RPCVLNNavigator:
         env: Mapping[str, str] | None = None,
         worker_options: Mapping[str, Any] | None = None,
         request_timeout_s: float = 300.0,
+        local_max_steps: int = 16,
+        status_poll_s: float = 0.1,
     ) -> None:
+        if type(local_max_steps) is not int or local_max_steps <= 0:
+            raise ValueError("local_max_steps must be positive")
+        if status_poll_s < 0:
+            raise ValueError("status_poll_s must not be negative")
         self.command = tuple(command)
         self.upstream_root = Path(upstream_root)
         self.checkpoint = Path(checkpoint)
@@ -639,6 +647,8 @@ class RPCVLNNavigator:
         self.env = dict(env or {})
         self.worker_options = dict(worker_options or {})
         self.request_timeout_s = request_timeout_s
+        self.local_max_steps = local_max_steps
+        self.status_poll_s = status_poll_s
         self._task: NavTask | None = None
         self._process: JsonLineProcess | None = None
         self._retired_process: JsonLineProcess | None = None
@@ -716,48 +726,109 @@ class RPCVLNNavigator:
                     "model": self.model_name,
                     "protocol": self.protocol_version,
                     "requirements": self.requirements,
+                    "local_max_steps": self.local_max_steps,
                 }
             )
         return (
             Tool(
-                "vln.navigate.start",
-                "Start a complete external VLN navigation job.",
+                "vln.navigate.task",
+                "Run the complete task instruction with the VLN model and block "
+                "until it finishes. This compatibility tool is intended for "
+                "passthrough agents.",
                 {
                     "type": "object",
                     "properties": {
                         "instruction": {"type": "string", "minLength": 1},
-                        "options": {"type": "object"},
                     },
-                    "required": ["instruction", "options"],
+                    "required": ["instruction"],
                     "additionalProperties": False,
                 },
-                self._start_job,
+                self._navigate_task,
                 writes=True,
             ),
             Tool(
-                "vln.navigate.status",
-                "Get external VLN job state.",
+                "vln.navigate.local",
+                "Navigate to one landmark, opening, object, or free-space region "
+                "visible in the latest observation, then block until the local "
+                "attempt finishes. The instruction must not contain the complete "
+                "task or unseen waypoints.",
                 {
                     "type": "object",
-                    "properties": {"job_id": {"type": "string"}},
-                    "required": ["job_id"],
+                    "properties": {
+                        "instruction": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 256,
+                            "description": (
+                                "One short instruction grounded in a target visible "
+                                "in the latest observation."
+                            ),
+                        },
+                        "max_steps": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": self.local_max_steps,
+                            "description": (
+                                "Optional execution watchdog for this visible-route "
+                                "attempt. Omit it to use the provider default; route "
+                                "scope is defined by the visible path and stopping "
+                                "point, not by this bound."
+                            ),
+                        },
+                    },
+                    "required": ["instruction"],
                     "additionalProperties": False,
                 },
-                self._status_job,
-            ),
-            Tool(
-                "vln.navigate.cancel",
-                "Cancel an external VLN job.",
-                {
-                    "type": "object",
-                    "properties": {"job_id": {"type": "string"}},
-                    "required": ["job_id"],
-                    "additionalProperties": False,
-                },
-                self._cancel_job,
+                self._navigate_local,
                 writes=True,
             ),
         )
+
+    async def _navigate_task(self, actor: str, arguments: dict[str, Any]) -> Any:
+        return await self._run_blocking_job(actor, arguments["instruction"], {})
+
+    async def _navigate_local(self, actor: str, arguments: dict[str, Any]) -> Any:
+        max_steps = arguments.get("max_steps", self.local_max_steps)
+        return await self._run_blocking_job(
+            actor,
+            arguments["instruction"],
+            {"max_steps": max_steps},
+        )
+
+    async def _run_blocking_job(
+        self, actor: str, instruction: str, options: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        started = await self._start_job(
+            actor,
+            {"instruction": instruction, "options": dict(options)},
+        )
+        job_id = started["job_id"]
+        try:
+            while True:
+                status = await self._status_job(actor, {"job_id": job_id})
+                if status["state"] in self._terminal_states:
+                    return {
+                        key: value
+                        for key, value in status.items()
+                        if key not in {"job_id", "traceback"}
+                    }
+                await asyncio.sleep(self.status_poll_s)
+        except asyncio.CancelledError as cancellation:
+            try:
+                await asyncio.shield(self._cancel_if_active(job_id))
+            except BaseException as cleanup_error:
+                raise cancellation from cleanup_error
+            raise
+
+    async def _cancel_if_active(self, job_id: str) -> None:
+        async with self._lifecycle_lock:
+            if job_id not in self._active_jobs:
+                return
+            try:
+                await self._cancel_job_locked(job_id)
+            except BaseException as error:
+                await self._close_after_error_locked(error)
+                raise
 
     async def _start_job(self, actor: str, arguments: dict[str, Any]) -> Any:
         del actor

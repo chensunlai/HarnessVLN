@@ -11,7 +11,8 @@ environment:
       turn_left: 2
       turn_right: 3
     goal_finish_action: 0
-    observation_channels: [rgb, depth, gps, compass, objectgoal]
+    observation_channels: [rgb, third_rgb, depth, third_depth, gps, compass, objectgoal]
+    main_camera_channel: third_rgb
     static_channels:
       depth_metadata:
         encoding: linear_normalized

@@ -9,6 +9,7 @@ vln:
       upstream_root: cache/upstream/janusvln
       checkpoint: model/janusvln
       cwd: .
+      local_max_steps: 16
       env:
         PYTHONPATH: src
       worker_options:

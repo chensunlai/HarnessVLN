@@ -179,7 +179,7 @@ def test_close_kills_worker_descendants_after_leader_already_exited(
     asyncio.run(scenario())
 
 
-def test_rpc_navigator_runs_through_standard_job_tools(tmp_path) -> None:
+def test_rpc_navigator_exposes_one_blocking_task_tool(tmp_path) -> None:
     async def scenario():
         checkpoint = tmp_path / "checkpoint"
         checkpoint.write_text("fixture")
@@ -193,14 +193,96 @@ def test_rpc_navigator_runs_through_standard_job_tools(tmp_path) -> None:
         result = await NavigationHarness(timeout_s=2).run_task(
             NavTask("rpc", goal),
             NavigationStack(
-                PassthroughVLNAgent(poll_period_s=0),
+                PassthroughVLNAgent(),
                 DummyNavigationEnvironment((goal,), targets=(0,)),
                 vln=navigator,
             ),
         )
         assert result.terminal.status == "completed"
-        assert [event.name for event in result.audit].count("vln.navigate.start") == 1
-        assert any(event.name == "vln.navigate.status" for event in result.audit)
+        assert [event.name for event in result.audit].count("vln.navigate.task") == 1
+        assert not any(
+            event.name in {
+                "vln.navigate.start",
+                "vln.navigate.status",
+                "vln.navigate.cancel",
+            }
+            for event in result.audit
+        )
+
+    asyncio.run(scenario())
+
+
+def test_rpc_local_call_uses_requested_bounded_budget(tmp_path, monkeypatch) -> None:
+    async def scenario():
+        navigator = RPCVLNNavigator(
+            ("worker",),
+            upstream_root=tmp_path,
+            checkpoint=tmp_path / "checkpoint",
+            local_max_steps=16,
+        )
+        captured = {}
+
+        async def run_blocking(actor, instruction, options):
+            captured.update(actor=actor, instruction=instruction, options=dict(options))
+            return {"state": "limit_reached", "steps": 4, "reason": "limit"}
+
+        monkeypatch.setattr(navigator, "_run_blocking_job", run_blocking)
+
+        result = await navigator._navigate_local(
+            "agent", {"instruction": "Stop beside the visible chair.", "max_steps": 4}
+        )
+
+        assert result["steps"] == 4
+        assert captured == {
+            "actor": "agent",
+            "instruction": "Stop beside the visible chair.",
+            "options": {"max_steps": 4},
+        }
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("value", [True, 1.5, 0, -1])
+def test_rpc_local_step_limit_requires_positive_integer(tmp_path, value) -> None:
+    with pytest.raises(ValueError, match="local_max_steps"):
+        RPCVLNNavigator(
+            ("worker",),
+            upstream_root=tmp_path,
+            checkpoint=tmp_path / "checkpoint",
+            local_max_steps=value,
+        )
+
+
+def test_rpc_blocking_result_does_not_expose_worker_traceback(
+    tmp_path, monkeypatch
+) -> None:
+    async def scenario():
+        navigator = RPCVLNNavigator(
+            ("worker",),
+            upstream_root=tmp_path,
+            checkpoint=tmp_path / "checkpoint",
+        )
+
+        async def start_job(actor, arguments):
+            return {"job_id": "job"}
+
+        async def status_job(actor, arguments):
+            return {
+                "job_id": "job",
+                "state": "failed",
+                "reason": "RuntimeError: inference failed",
+                "traceback": "internal worker traceback",
+            }
+
+        monkeypatch.setattr(navigator, "_start_job", start_job)
+        monkeypatch.setattr(navigator, "_status_job", status_job)
+
+        result = await navigator._run_blocking_job("agent", "local", {})
+
+        assert result == {
+            "state": "failed",
+            "reason": "RuntimeError: inference failed",
+        }
 
     asyncio.run(scenario())
 
@@ -233,7 +315,7 @@ def test_worker_sdk_runs_model_owned_navigation_loop(tmp_path) -> None:
         result = await NavigationHarness(timeout_s=2).run_task(
             NavTask("sdk", goal),
             NavigationStack(
-                PassthroughVLNAgent(poll_period_s=0),
+                PassthroughVLNAgent(),
                 ArrayEnvironment((goal,), targets=(2,)),
                 vln=navigator,
             ),
@@ -289,7 +371,7 @@ def test_session_scoped_worker_is_reused_and_releases_each_jobs_media(tmp_path) 
             result = await NavigationHarness(timeout_s=2).run_task(
                 NavTask(f"task-{index}", goal),
                 NavigationStack(
-                    PassthroughVLNAgent(poll_period_s=0),
+                    PassthroughVLNAgent(),
                     ArrayEnvironment((goal,), targets=(2,)),
                     vln=navigator,
                 ),
