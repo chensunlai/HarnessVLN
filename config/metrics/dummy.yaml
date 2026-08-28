@@ -1,0 +1,2 @@
+factory: metrics.dummy:DummyMetric
+parameters: {}

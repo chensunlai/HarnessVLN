@@ -117,6 +117,10 @@ class DomainOutput:
                 stream.write("\n")
 
 
+def write_json(path: str | Path, value: Any) -> None:
+    _write_json(Path(path), value)
+
+
 def _relative_path(value: str) -> PurePosixPath:
     path = PurePosixPath(value)
     if not value or path.is_absolute() or ".." in path.parts or "." in path.parts:

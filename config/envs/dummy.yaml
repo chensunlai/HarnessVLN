@@ -1,0 +1,4 @@
+factory: envs.dummy:DummyEnvironment
+parameters:
+  start: 0
+  max_steps: 100

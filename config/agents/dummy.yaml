@@ -1,0 +1,7 @@
+agent:
+  factory: agents.dummy:DummyAgent
+  parameters:
+    poll_interval_s: 0.001
+components:
+  - ../memory/dummy.yaml
+  - ../vln/dummy.yaml

@@ -1,0 +1,8 @@
+id: dummy
+benchmark:
+  factory: benches.dummy:DummyBenchmark
+  parameters:
+    targets: [2, -3, 0, 4, -1, 1]
+environment: ../envs/dummy.yaml
+metrics:
+  - ../metrics/dummy.yaml

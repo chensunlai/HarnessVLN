@@ -1,0 +1,3 @@
+factory: vln.dummy:DummyVLN
+parameters:
+  step_delay_s: 0.001

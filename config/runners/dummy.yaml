@@ -1,0 +1,12 @@
+agent: ../agents/dummy.yaml
+benches:
+  - ../benches/dummy.yaml
+output_dir: ../../runs/nexus_dummy
+parallelism: 2
+workers:
+  - name: local-0
+    environment: {}
+  - name: local-1
+    environment: {}
+timeout_s: 5
+shutdown_timeout_s: 2
