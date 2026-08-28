@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-import math
 from pathlib import Path
 from typing import Any
 

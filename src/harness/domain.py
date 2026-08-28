@@ -60,10 +60,8 @@ class DomainRuntime:
     ) -> DomainResult:
         identifier = domain_id or uuid.uuid4().hex
         self._validate_components(components)
-        output = DomainOutput(output_root, identifier)
         bus = FunctionBus()
         cancelled = asyncio.Event()
-        contexts: dict[str, ComponentContext] = {}
 
         for component in components.all:
             bus.register(component.name, tuple(component.functions()))
@@ -74,9 +72,13 @@ class DomainRuntime:
         bus.seal()
 
         for component in components.all:
+            bus.require(component.name, component.required_functions)
+
+        output = DomainOutput(output_root, identifier)
+        contexts: dict[str, ComponentContext] = {}
+        for component in components.all:
             required = frozenset(component.required_functions)
             optional = frozenset(component.optional_functions) & bus.names
-            bus.require(component.name, required)
             contexts[component.name] = ComponentContext(
                 domain_id=identifier,
                 task=task,
@@ -87,6 +89,7 @@ class DomainRuntime:
 
         system = bus.client("domain", None)
         started: list[Component] = []
+        ready: set[int] = set()
         cleanup_errors: list[str] = []
         agent_task: asyncio.Task[None] | None = None
         terminal_task: asyncio.Task[Terminal] | None = None
@@ -96,9 +99,9 @@ class DomainRuntime:
         cancellation: asyncio.CancelledError | None = None
 
         try:
-            await self._start(components.environment, contexts, started)
+            await self._start(components.environment, contexts, started, ready)
             for component in (*components.services, *components.metrics, components.agent):
-                await self._start(component, contexts, started)
+                await self._start(component, contexts, started, ready)
 
             agent_task = asyncio.create_task(
                 components.agent.run(contexts[components.agent.name]),
@@ -141,7 +144,7 @@ class DomainRuntime:
                 cleanup_errors.append(_error("environment result", error))
 
             for metric in components.metrics:
-                if metric not in started:
+                if id(metric) not in ready:
                     continue
                 try:
                     values = await metric.evaluate(terminal, environment_result)
@@ -166,6 +169,11 @@ class DomainRuntime:
             component.name: output.component(component.name).manifest()
             for component in components.all
         }
+        for manifest in manifests.values():
+            cleanup_errors.extend(
+                f"component output {manifest.name}: {error}"
+                for error in manifest.output_errors
+            )
         result = DomainResult(
             domain_id=identifier,
             task_id=task.task_id,
@@ -289,9 +297,11 @@ class DomainRuntime:
         component: Component,
         contexts: Mapping[str, ComponentContext],
         started: list[Component],
+        ready: set[int],
     ) -> None:
-        await component.start(contexts[component.name])
         started.append(component)
+        await component.start(contexts[component.name])
+        ready.add(id(component))
 
     @staticmethod
     def _validate_components(components: DomainComponents) -> None:

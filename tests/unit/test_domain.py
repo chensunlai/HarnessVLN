@@ -225,14 +225,17 @@ class MissingDependencyAgent(ReturningAgent):
     required_functions = frozenset({"vln.missing"})
 
 
-def test_missing_component_dependency_fails_before_environment_start():
+def test_missing_component_dependency_fails_before_environment_start(tmp_path):
     with pytest.raises(ContractError, match="vln.missing"):
         run(
             DomainRuntime().run(
                 NavigationTask("case-3", "Use missing function"),
                 DomainComponents(TestEnvironment([]), MissingDependencyAgent()),
+                output_root=str(tmp_path),
+                domain_id="invalid-domain",
             )
         )
+    assert not (tmp_path / "invalid-domain").exists()
 
 
 class NoStopEnvironment(TestEnvironment):
@@ -262,3 +265,82 @@ def test_nav_stop_must_be_owned_by_environment():
                 ),
             )
         )
+
+
+class FailingService(Component):
+    name = "failing_service"
+
+    def __init__(self, closed):
+        self.closed = closed
+
+    async def start(self, context):
+        raise RuntimeError("startup failed after acquiring a resource")
+
+    async def close(self, reason):
+        self.closed.append((self.name, reason))
+
+
+def test_partially_started_component_is_still_closed():
+    closed = []
+    result = run(
+        DomainRuntime(timeout_s=1).run(
+            NavigationTask("case-5", "Fail during startup"),
+            DomainComponents(
+                TestEnvironment(closed),
+                ReturningAgent(),
+                (FailingService(closed),),
+            ),
+        )
+    )
+    assert result.terminal.status == "failed"
+    assert "startup failed" in result.terminal.reason
+    assert [name for name, _ in closed] == ["failing_service", "environment"]
+
+
+class WaitingAgent(Agent):
+    name = "agent"
+
+    async def run(self, context):
+        await context.cancelled.wait()
+
+
+class NativeTerminalEnvironment(TestEnvironment):
+    async def start(self, context):
+        async def finish():
+            await asyncio.sleep(0.001)
+            self._terminal = Terminal(
+                "environment_terminal", "native episode ended", self.name
+            )
+            self._terminal_event.set()
+
+        self._native_task = asyncio.create_task(finish())
+
+    async def close(self, reason):
+        await asyncio.gather(self._native_task, return_exceptions=True)
+        await super().close(reason)
+
+
+def test_native_environment_terminal_ends_a_cooperative_agent():
+    result = run(
+        DomainRuntime(timeout_s=1, shutdown_timeout_s=0.1).run(
+            NavigationTask("case-6", "Wait for native terminal"),
+            DomainComponents(NativeTerminalEnvironment([]), WaitingAgent()),
+        )
+    )
+    assert result.terminal == Terminal(
+        "environment_terminal", "native episode ended", "environment"
+    )
+    assert result.cleanup_errors == ()
+
+
+def test_domain_timeout_uses_environment_stop_and_drains_agent():
+    result = run(
+        DomainRuntime(timeout_s=0.01, shutdown_timeout_s=0.1).run(
+            NavigationTask("case-7", "Wait forever"),
+            DomainComponents(TestEnvironment([]), WaitingAgent()),
+        )
+    )
+    assert result.terminal == Terminal(
+        "timeout", "navigation Domain timed out", "domain"
+    )
+    assert result.cleanup_errors == ()

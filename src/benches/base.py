@@ -4,7 +4,8 @@ from abc import ABC, abstractmethod
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 
-from harness import DomainResult, NavigationTask
+from harness.domain import DomainResult
+from schemas import NavigationTask
 
 
 @dataclass(frozen=True, slots=True)

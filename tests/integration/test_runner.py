@@ -1,7 +1,13 @@
 import json
 from pathlib import Path
 
-from harness.config import BenchConfig, FactorySpec, RunnerConfig, load_runner_config
+from harness.config import (
+    AgentConfig,
+    BenchConfig,
+    FactorySpec,
+    RunnerConfig,
+    load_runner_config,
+)
 from harness.runner import Runner
 
 
@@ -63,3 +69,31 @@ def test_runner_executes_complete_domains_in_fixed_worker_processes(tmp_path):
     assert (bench_root / "result.json").is_file()
     assert len(list((bench_root / "episodes").iterdir())) == 6
     assert (run_root / "benches" / "001-dummy_second" / "result.json").is_file()
+
+
+def test_runner_isolates_component_factory_failure_to_its_domain(tmp_path):
+    loaded = load_runner_config(ROOT / "config" / "runners" / "dummy.yaml")
+    one_case = BenchConfig(
+        config_id="broken",
+        benchmark=FactorySpec("benches.dummy:DummyBenchmark", {"targets": [1]}),
+        environment=loaded.benches[0].environment,
+        metrics=loaded.benches[0].metrics,
+    )
+    config = RunnerConfig(
+        agent=AgentConfig(
+            FactorySpec("agents.dummy:MissingAgent"), loaded.agent.components
+        ),
+        benches=(one_case,),
+        output_dir=tmp_path,
+        workers=(loaded.workers[0],),
+        timeout_s=1,
+        shutdown_timeout_s=1,
+    )
+
+    summary = Runner().run(config, run_id="broken-run")
+
+    assert summary.failed
+    record = summary.benches[0].records[0]
+    assert record.result is None
+    assert "MissingAgent" in record.error
+    assert (tmp_path / "broken-run" / "result.json").is_file()

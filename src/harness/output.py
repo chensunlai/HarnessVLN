@@ -22,12 +22,14 @@ class ComponentManifest:
     name: str
     metadata: JsonObject
     artifacts: tuple[Artifact, ...]
+    output_errors: tuple[str, ...] = ()
 
     def as_dict(self) -> JsonObject:
         return {
             "name": self.name,
             "metadata": dict(self.metadata),
             "artifacts": [asdict(artifact) for artifact in self.artifacts],
+            "output_errors": list(self.output_errors),
         }
 
 
@@ -80,10 +82,19 @@ class ComponentOutput:
 
     def manifest(self) -> ComponentManifest:
         with self._lock:
+            artifacts: list[Artifact] = []
+            errors: list[str] = []
+            if self.root is not None:
+                for relative, artifact in sorted(self._artifacts.items()):
+                    if (self.root / relative).is_file():
+                        artifacts.append(artifact)
+                    else:
+                        errors.append(f"missing declared artifact: {relative}")
             return ComponentManifest(
                 name=self.name,
                 metadata=dict(self._metadata),
-                artifacts=tuple(self._artifacts[path] for path in sorted(self._artifacts)),
+                artifacts=tuple(artifacts),
+                output_errors=tuple(errors),
             )
 
 

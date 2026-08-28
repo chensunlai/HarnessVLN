@@ -40,7 +40,7 @@ Runner 只枚举任务、分配资源、启动 Domain、收集结果和汇总进
 普通组件只需要声明依赖、提供函数并实现生命周期：
 
 ```python
-class Component(Protocol):
+class Component(ABC):
     name: str
     required_functions: frozenset[str]
 
@@ -131,3 +131,18 @@ construct -> register functions -> validate dependencies
 
 核心只保留 `DomainRuntime`、`FunctionBus`、组件协议、终止状态和结果类型。配置加载、
 进程调度与输出管理建立在这些契约之上；具体模拟器、模型和 Agent Loop 留在各自三级目录。
+
+## 实现映射
+
+| 责任 | 文件 |
+|---|---|
+| 函数注册、schema、白名单、串行键、审计 | `src/harness/functions.py` |
+| Component、Agent、Environment、Metric 契约 | `src/harness/components.py` |
+| 单 Domain 生命周期与收敛 | `src/harness/domain.py` |
+| 组件隔离输出与 artifact 校验 | `src/harness/output.py` |
+| YAML 引用与工厂描述 | `src/harness/config.py` |
+| 固定资源 worker 与多 Domain 调度 | `src/harness/runner.py` |
+| Case 与 Bench 聚合边界 | `src/benches/base.py` |
+
+当前 Dummy 纵向链路只用于证明以上边界真实可运行。Habitat、AI2-THOR、Isaac Sim 以及
+真实 VLN 模型应作为后续独立模块接入，不改变 Domain 或 Runner 的控制流。

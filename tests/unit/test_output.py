@@ -24,3 +24,12 @@ def test_component_output_rejects_paths_outside_its_scope(tmp_path, path):
     output = ComponentOutput("agent", tmp_path / "agent")
     with pytest.raises(ValueError):
         output.path(path)
+
+
+def test_component_manifest_does_not_claim_a_missing_artifact(tmp_path):
+    output = ComponentOutput("agent", tmp_path / "agent")
+    output.add_artifact("missing.json", "application/json")
+
+    manifest = output.manifest()
+    assert manifest.artifacts == ()
+    assert manifest.output_errors == ("missing declared artifact: missing.json",)

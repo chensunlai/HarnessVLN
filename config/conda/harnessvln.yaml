@@ -1,0 +1,9 @@
+name: harnessvln
+channels:
+  - conda-forge
+dependencies:
+  - python>=3.10,<3.14
+  - jsonschema>=4.20
+  - mypy>=1.10
+  - pytest>=8
+  - pyyaml>=6

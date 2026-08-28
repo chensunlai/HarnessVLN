@@ -56,6 +56,8 @@ Thumbs.db
 /*
 !/*/
 !/.gitignore
+!/README.md
+!/pytest.ini
 
 # Local data, caches, models, and run outputs
 # These come last so they override the root-directory allow rule above.
