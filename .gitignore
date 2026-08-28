@@ -56,6 +56,7 @@ Thumbs.db
 /*
 !/*/
 !/.gitignore
+!/README.md
 
 # Local data, caches, models, and run outputs
 # These come last so they override the root-directory allow rule above.
