@@ -1,6 +1,0 @@
-environment:
-    factory: envs.dummy:from_episode
-interactive:
-  scene_id: dummy_scene
-provenance:
-  simulator: dummy

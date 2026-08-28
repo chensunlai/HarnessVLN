@@ -1,7 +1,0 @@
-extends: passthrough.yaml
-agent:
-  params:
-    poll_period_s: 1.0
-  vln: ../vln/dualvln.yaml
-provenance:
-  combination: passthrough-dualvln

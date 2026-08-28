@@ -1,20 +1,3 @@
-from schemas.navigation import (
-    EnvironmentEpisode,
-    EnvironmentTerminal,
-    NavGoal,
-    NavTask,
-    Observation,
-    Pose,
-)
-from schemas.requirements import MotionProfile, NavigationProfile
+from schemas.navigation import JsonObject, NavigationTask, Terminal
 
-__all__ = [
-    "EnvironmentEpisode",
-    "EnvironmentTerminal",
-    "MotionProfile",
-    "NavGoal",
-    "NavigationProfile",
-    "NavTask",
-    "Observation",
-    "Pose",
-]
+__all__ = ["JsonObject", "NavigationTask", "Terminal"]

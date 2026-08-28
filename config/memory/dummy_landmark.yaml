@@ -1,6 +1,0 @@
-memory:
-    factory: memory.dummy_landmark:DummyLandmarkMemory
-    serial: true
-    params:
-      root: runs/memory/dummy_landmark
-      writeback: true

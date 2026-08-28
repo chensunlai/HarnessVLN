@@ -1,18 +1,30 @@
-class HarnessError(RuntimeError):
-    """Base error for composition and execution failures."""
+class NexusError(Exception):
+    """Base error for the Nexus runtime."""
 
 
-class DuplicateToolError(HarnessError):
+class ContractError(NexusError):
+    """A component or function violates a static runtime contract."""
+
+
+class FunctionError(NexusError):
+    """Base error for function registration and invocation."""
+
+
+class FunctionNotFoundError(FunctionError):
     pass
 
 
-class MissingToolError(HarnessError):
+class FunctionPermissionError(FunctionError):
     pass
 
 
-class ToolClosedError(HarnessError):
+class FunctionValidationError(FunctionError):
     pass
 
 
-class ToolValidationError(HarnessError):
+class DomainClosedError(FunctionError):
+    pass
+
+
+class DomainExecutionError(NexusError):
     pass

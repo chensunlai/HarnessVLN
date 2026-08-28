@@ -1,107 +1,48 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any
 
 
 JsonObject = dict[str, Any]
 
 
 @dataclass(frozen=True, slots=True)
-class Pose:
-    """A metric pose whose frame and units are explicit."""
-
-    frame: str
-    x: float
-    y: float
-    z: float = 0.0
-    yaw: float | None = None
-    pitch: float | None = None
-
-    def as_dict(self) -> JsonObject:
-        value: JsonObject = {
-            "frame": self.frame,
-            "x": self.x,
-            "y": self.y,
-            "z": self.z,
-        }
-        if self.yaw is not None:
-            value["yaw"] = self.yaw
-        if self.pitch is not None:
-            value["pitch"] = self.pitch
-        return value
-
-
-@dataclass(frozen=True, slots=True)
-class NavGoal:
-    goal_id: str
-    instruction: str
-    modality: str = "language"
-    public: Mapping[str, Any] = field(default_factory=dict)
-
-    def __post_init__(self) -> None:
-        if not self.goal_id:
-            raise ValueError("goal_id must not be empty")
-        if not self.instruction:
-            raise ValueError("instruction must not be empty")
-
-
-@dataclass(frozen=True, slots=True)
-class NavTask:
-    """Public task data visible to an agent.
-
-    For a compound task this contains only the current goal. Future goals stay in
-    the environment/benchmark adapter and are revealed by ``nav.goal.finish``.
-    """
-
+class NavigationTask:
     task_id: str
-    goal: NavGoal
-    scene_id: str | None = None
-    public: Mapping[str, Any] = field(default_factory=dict)
+    instruction: str
+    metadata: JsonObject = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        if not self.task_id:
+        if not self.task_id.strip():
             raise ValueError("task_id must not be empty")
-
-    @property
-    def instruction(self) -> str:
-        return self.goal.instruction
-
-
-@dataclass(frozen=True, slots=True)
-class EnvironmentEpisode:
-    """Task data available to an environment adapter for one episode."""
-
-    task: NavTask
-    setup: Mapping[str, Any] = field(default_factory=dict, repr=False)
-
-
-@dataclass(frozen=True, slots=True)
-class Observation:
-    observation_id: str
-    source_time: float
-    received_time: float
-    frame: str
-    channels: Mapping[str, Any]
-    pose: Pose | None = None
-    extras: Mapping[str, Any] = field(default_factory=dict)
+        if not self.instruction.strip():
+            raise ValueError("instruction must not be empty")
+        object.__setattr__(self, "metadata", dict(self.metadata))
 
     def as_dict(self) -> JsonObject:
-        value: JsonObject = {
-            "observation_id": self.observation_id,
-            "source_time": self.source_time,
-            "received_time": self.received_time,
-            "frame": self.frame,
-            "channels": dict(self.channels),
-            "extras": dict(self.extras),
+        return {
+            "task_id": self.task_id,
+            "instruction": self.instruction,
+            "metadata": dict(self.metadata),
         }
-        if self.pose is not None:
-            value["pose"] = self.pose.as_dict()
-        return value
 
 
 @dataclass(frozen=True, slots=True)
-class EnvironmentTerminal:
-    kind: Literal["completed", "failed"]
+class Terminal:
+    status: str
     reason: str
+    actor: str
+
+    def __post_init__(self) -> None:
+        if not self.status.strip():
+            raise ValueError("terminal status must not be empty")
+        if not self.actor.strip():
+            raise ValueError("terminal actor must not be empty")
+
+    def as_dict(self) -> JsonObject:
+        return {
+            "status": self.status,
+            "reason": self.reason,
+            "actor": self.actor,
+        }

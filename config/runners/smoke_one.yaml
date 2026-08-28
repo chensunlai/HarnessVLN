@@ -1,7 +1,0 @@
-extends: r2r_streamvln.yaml
-runner:
-  max_cases: 1
-output:
-  root: runs/r2r_streamvln_smoke
-provenance:
-  evaluation_scope: first-case-smoke

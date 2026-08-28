@@ -1,5 +1,0 @@
-extends: r2r_ce.yaml
-benchmark:
-  environment: ../envs/habitat_r2r_dualvln.yaml
-provenance:
-  sensor_profile: dualvln-look-down-30deg

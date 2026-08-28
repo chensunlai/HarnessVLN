@@ -1,9 +1,0 @@
-extends: r2r_janusvln.yaml
-runner:
-  devices: [0, 1]
-  workers_per_device: 1
-  task_parallelism: 2
-output:
-  root: runs/r2r_janusvln_2gpu
-provenance:
-  execution: two-gpu-process-pool

@@ -1,5 +1,0 @@
-extends: habitat_objectnav_mp3d.yaml
-benchmark:
-  environment: ../envs/habitat_objectnav_mp3d_dualvln.yaml
-provenance:
-  sensor_profile: dualvln-look-down-30deg

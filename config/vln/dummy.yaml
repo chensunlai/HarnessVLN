@@ -1,7 +1,0 @@
-vln:
-    factory: vln.dummy:DummyVLNNavigator
-    params:
-      max_steps: 100
-      inference_period_s: 0.0
-provenance:
-  model: dummy
