@@ -769,9 +769,10 @@ class RPCVLNNavigator:
                             "minimum": 1,
                             "maximum": self.local_max_steps,
                             "description": (
-                                "Bound for this visible-target attempt. Use a short "
-                                "budget for nearby objects and the configured maximum "
-                                "only for distant visible passages."
+                                "Optional execution watchdog for this visible-route "
+                                "attempt. Omit it to use the provider default; route "
+                                "scope is defined by the visible path and stopping "
+                                "point, not by this bound."
                             ),
                         },
                     },

@@ -108,6 +108,10 @@ class DummyVLNNavigator:
                             "type": "integer",
                             "minimum": 1,
                             "maximum": self.local_max_steps,
+                            "description": (
+                                "Optional execution watchdog; the instruction's "
+                                "visible path and stopping point define route scope."
+                            ),
                         },
                     },
                     "required": ["instruction"],

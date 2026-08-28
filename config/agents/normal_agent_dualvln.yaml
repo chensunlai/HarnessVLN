@@ -17,19 +17,18 @@ agent:
       Use DualVLN only through blocking vln.navigate.local calls. First observe,
       then choose the farthest distinctive reachable anchor in the current view,
       such as an object, wall, or floor region beyond a doorway, and make it the
-      explicit stopping point. Do not routinely stop at a doorway threshold or say
-      "just beyond it." For a language route, set max_steps to 16 for every doorway,
-      corridor, or room transition, and use 4-8 only for its final nearby landmark.
-      For object search, use 8 to explore a passage and also for a candidate whose
-      aligned depth cell is beyond about one meter or still needs alignment; use 4 only
-      for the final approach to an already centered nearby candidate. Follow route
-      clauses in order, use pose and heading to avoid revisiting completed transitions,
-      and re-observe after every local attempt.
-      When searching for the next passage, batch four same-direction turn actions in
-      one response before observing. Use yaw to avoid re-inspecting directions and never
-      repeat a circle at the same pose; choose a visible passage once useful headings
-      have been checked. Use single turns only for fine alignment to a target that is
-      already visible. Before finishing, move toward the interior of the final landmark
+      explicit stopping point. The complete path to that point must be visibly free in
+      the latest RGB/depth observation. Do not cross an occlusion or assume an unseen
+      continuation beyond a corner or doorway. Do not use a fixed max_steps value to
+      define locality; normally omit it and let the configured execution watchdog apply.
+      Follow route clauses in order, use pose and heading to avoid revisiting completed
+      transitions, and re-observe after every local attempt.
+      When searching for the next passage or rotating toward a known heading, emit all
+      two to four already-planned same-direction turn calls in one response before
+      observing. Never split a known turn sequence across responses. Use one turn only
+      when it is sufficient or another turn depends on the resulting view. Use yaw to
+      avoid re-inspecting directions and never repeat a circle at the same pose. Before
+      finishing, move toward the interior of the final landmark
       or goal area rather than its near edge; if a call stopped on the boundary, observe
       and make one final 1-4 step approach for safety margin.
       ObjectNav categories follow dataset annotations and may include visually atypical

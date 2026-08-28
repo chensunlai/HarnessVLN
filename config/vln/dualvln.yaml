@@ -9,7 +9,7 @@ vln:
       upstream_root: cache/upstream/internnav
       checkpoint: model/dualvln
       cwd: .
-      local_max_steps: 16
+      local_max_steps: 240
       env:
         PYTHONPATH: src
         HF_HUB_OFFLINE: "1"

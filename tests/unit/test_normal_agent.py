@@ -144,6 +144,10 @@ def test_normal_agent_runs_native_responses_tool_loop() -> None:
         assert first_request["instructions"].endswith(
             "Fixture-specific guidance."
         )
+        assert "MUST emit every move" in first_request["instructions"]
+        assert "Never split a known sequence across responses" in first_request[
+            "instructions"
+        ]
         assert first_request["store"] is False
         assert first_request["tool_choice"] == "required"
         assert {tool["name"] for tool in first_request["tools"]} == {
@@ -290,6 +294,12 @@ def test_normal_agent_uses_one_blocking_local_vln_call() -> None:
         assert "must never be copied or paraphrased" in responses.requests[0][
             "instructions"
         ]
+        assert "path and stopping region are both visible" in responses.requests[0][
+            "instructions"
+        ]
+        assert "max_steps is only an optional execution watchdog" in responses.requests[
+            0
+        ]["instructions"]
 
     run(scenario())
 
@@ -678,6 +688,65 @@ def test_normal_agent_navigation_budget_rejects_batch_before_execution() -> None
     run(scenario())
 
 
+def test_normal_agent_clamps_local_watchdog_to_remaining_navigation_budget() -> None:
+    async def scenario() -> None:
+        responses = ScriptedResponses(
+            [
+                [function_call("observe-before-moves", "nav__observe", {})],
+                [
+                    function_call(
+                        f"move-{index}",
+                        "nav__move__discrete",
+                        {"action": "forward"},
+                    )
+                    for index in range(2)
+                ],
+                [function_call("observe-before-vln", "nav__observe", {})],
+                [
+                    function_call(
+                        "local",
+                        "vln__navigate__local",
+                        {
+                            "instruction": (
+                                "Follow the visible free floor and stop by its far "
+                                "edge."
+                            )
+                        },
+                    )
+                ],
+                [
+                    function_call(
+                        "stop",
+                        "nav__stop",
+                        {"status": "failed", "reason": "budget checked"},
+                    )
+                ],
+            ]
+        )
+        goal = NavGoal("goal", "move within the global budget")
+        result = await NavigationHarness(timeout_s=1).run_task(
+            NavTask("local-action-budget", goal),
+            NavigationStack(
+                NormalAgent(
+                    "test-model",
+                    ("nav.observe", "nav.move.discrete", "vln.navigate.local"),
+                    max_navigation_actions=5,
+                    client=SimpleNamespace(responses=responses),
+                ),
+                DummyNavigationEnvironment((goal,), targets=(20,)),
+                vln=DummyVLNNavigator(local_max_steps=16),
+            ),
+        )
+
+        assert result.environment["position"] == 5
+        local_event = next(
+            event for event in result.audit if event.name == "vln.navigate.local"
+        )
+        assert local_event.arguments["max_steps"] == 3
+
+    run(scenario())
+
+
 def test_normal_agent_limits_repeated_object_candidate_calls() -> None:
     async def scenario() -> None:
         outputs: list[list[Any]] = []
@@ -797,7 +866,7 @@ def test_normal_agent_resets_object_candidate_limit_after_position_progress() ->
     run(scenario())
 
 
-def test_normal_agent_limits_object_local_navigation_to_eight_steps() -> None:
+def test_normal_agent_uses_provider_watchdog_for_object_local_navigation() -> None:
     async def scenario() -> None:
         responses = ScriptedResponses(
             [
@@ -811,7 +880,6 @@ def test_normal_agent_limits_object_local_navigation_to_eight_steps() -> None:
                                 "Go through the visible doorway and stop by its far "
                                 "wall."
                             ),
-                            "max_steps": 16,
                         },
                     )
                 ],
@@ -819,7 +887,7 @@ def test_normal_agent_limits_object_local_navigation_to_eight_steps() -> None:
                     function_call(
                         "stop",
                         "nav__stop",
-                        {"status": "failed", "reason": "step guard checked"},
+                        {"status": "failed", "reason": "watchdog checked"},
                     )
                 ],
             ]
@@ -828,67 +896,27 @@ def test_normal_agent_limits_object_local_navigation_to_eight_steps() -> None:
             "goal", "Find the cabinet.", "object", {"category": "cabinet"}
         )
         result = await NavigationHarness(timeout_s=1).run_task(
-            NavTask("object-step-limit", goal),
+            NavTask("object-provider-watchdog", goal),
             NavigationStack(
                 NormalAgent(
                     "test-model",
                     ("nav.observe", "vln.navigate.local"),
                     client=SimpleNamespace(responses=responses),
                 ),
-                DummyNavigationEnvironment((goal,), targets=(10,)),
+                DummyNavigationEnvironment((goal,), targets=(20,)),
                 vln=DummyVLNNavigator(local_max_steps=16),
             ),
         )
 
         assert result.terminal.status == "failed"
-        assert "vln.navigate.local" not in [event.name for event in result.audit]
-        rejected = json.loads(responses.requests[2]["input"][-1]["output"])
-        assert rejected["error"]["type"] == "AgentToolPolicyError"
-        assert "between 1 and 8" in rejected["error"]["message"]
-
-        route_responses = ScriptedResponses(
-            [
-                [function_call("route-observe", "nav__observe", {})],
-                [
-                    function_call(
-                        "route-local",
-                        "vln__navigate__local",
-                        {
-                            "instruction": (
-                                "Go through the visible doorway and stop by its far "
-                                "wall."
-                            ),
-                            "max_steps": 16,
-                        },
-                    )
-                ],
-                [
-                    function_call(
-                        "route-stop",
-                        "nav__stop",
-                        {"status": "failed", "reason": "route cap checked"},
-                    )
-                ],
-            ]
+        assert result.environment["position"] == 16
+        local_event = next(
+            event for event in result.audit if event.name == "vln.navigate.local"
         )
-        route_goal = NavGoal("route", "Go to the far room.", "language")
-        route_result = await NavigationHarness(timeout_s=1).run_task(
-            NavTask("route-step-limit", route_goal),
-            NavigationStack(
-                NormalAgent(
-                    "test-model",
-                    ("nav.observe", "vln.navigate.local"),
-                    client=SimpleNamespace(responses=route_responses),
-                ),
-                DummyNavigationEnvironment((route_goal,), targets=(20,)),
-                vln=DummyVLNNavigator(local_max_steps=16),
-            ),
-        )
-
-        assert route_result.environment["position"] == 16
-        assert [event.name for event in route_result.audit].count(
-            "vln.navigate.local"
-        ) == 1
+        assert local_event.arguments["max_steps"] == 16
+        local_feedback = json.loads(responses.requests[2]["input"][-1]["output"])
+        assert local_feedback["ok"] is True
+        assert local_feedback["result"]["steps"] == 16
 
     run(scenario())
 

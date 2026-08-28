@@ -23,31 +23,33 @@ Advance only the earliest unfinished clause. Never jump to a later landmark mere
 because a similar object is visible; visually confirm that every preceding room, turn,
 and landmark has been traversed before using the final landmark as evidence of arrival.
 
-Before every vln.navigate.local call, use nav.observe and select exactly one traversable
-target visible in the latest RGB image. Give one short sentence with an explicit local
-stopping point. Prefer the farthest distinctive reachable anchor in the current view,
-typically a visible object, wall, or floor region beyond a doorway. For example, "Go
-through the doorway into the visible tiled hall and stop by its far wall." Do not use
-the doorway threshold or "just beyond it" as a routine stop point. Never mention unseen
-rooms or multiple route segments. Always set max_steps. For a language route, use the
-schema maximum for a doorway, corridor, or room transition; reserve 4-8 steps for the
-final nearby landmark. For object search, use 8 steps to explore a passage. Also use 8
-for a visible candidate whose aligned depth cell is beyond about 1 meter or whose path
-still needs alignment; use 4 only for the final approach to an already centered nearby
-candidate. The call blocks; afterwards observe again. A limit_reached result is normal
-bounded progress, while failed indicates a real error.
+Before every vln.navigate.local call, use nav.observe and select exactly one continuous
+route segment whose path and stopping region are both visible and traversable in the
+latest RGB/depth observation. Give one short sentence with an explicit stopping point.
+Prefer the farthest distinctive anchor that is clearly reachable along visible free
+space, such as an object, wall, or floor region visible through an opening. Stop at the
+last visible navigable point before any occlusion; never assume a turn, room, waypoint,
+or continuation hidden behind a wall or doorway. Never mention multiple route segments.
+max_steps is only an optional execution watchdog, not the definition of a local route.
+Normally omit it and let the provider watchdog apply; use a smaller value only when a
+nearby final alignment specifically needs one. The call blocks; afterwards observe
+again. A limit_reached result is bounded progress, while failed indicates a real error.
 
 Use local VLN calls as the main navigation strategy. Direct moves are only for brief
-inspection, alignment, or final approach. Call one tool per response except that two
-to four consecutive nav.move.discrete calls may be batched. Re-observe after every
+inspection, alignment, or final approach. A response must contain either one non-move
+tool call or an ordered batch of one to four nav.move.discrete calls. When two to four
+consecutive moves are already decided and no intermediate visual evidence is needed,
+you MUST emit every move as a separate function call in the same response, in execution
+order. Never split a known sequence across responses. Emit one move only when the next
+move genuinely depends on its resulting observation. Re-observe after the complete
 movement batch or VLN call. Never batch any other tool.
 
-When searching for the next visible passage, never spend one response on a single
-15-degree inspection turn. Batch exactly four turns in the same direction in one
-response, then observe once. Use pose heading to avoid re-inspecting directions; never
-begin a second circle at the same position, and choose a visible passage once useful
-headings have been checked. Use one or two turns only for fine alignment to an already
-visible target.
+When searching for the next visible passage or rotating toward a known heading, batch
+the required two to four same-direction turns in one response, then observe once. Never
+emit those already-planned turns one per response. Use pose heading to avoid re-inspecting
+directions; never begin a second circle at the same position, and choose a visible
+passage once useful headings have been checked. Use a single turn only when one turn is
+sufficient or the following turn depends on the new view.
 
 For an object goal, explore distinct passages systematically using visual landmarks
 and pose history. Match the exact requested category and reject related but different
@@ -100,7 +102,6 @@ REASONING_EFFORTS = frozenset(
 )
 OBJECT_CANDIDATE_ATTEMPT_LIMIT = 3
 OBJECT_CANDIDATE_RESET_DISTANCE_M = 0.5
-OBJECT_LOCAL_STEP_LIMIT = 8
 STATIONARY_SCAN_RESET_DISTANCE_M = 0.2
 STATIONARY_TURN_ACTION_LIMIT = 24
 
@@ -208,12 +209,7 @@ class NormalAgent:
         object_category = _object_category(
             context.task.goal.modality, context.task.goal.public
         )
-        tool_local_step_cap = _local_step_cap(context.tools.specs)
-        local_step_cap = (
-            min(tool_local_step_cap, OBJECT_LOCAL_STEP_LIMIT)
-            if object_category is not None
-            else tool_local_step_cap
-        )
+        local_step_cap = _local_step_cap(context.tools.specs)
         context.output.record(
             {
                 "agent": type(self).__name__,
@@ -228,10 +224,10 @@ class NormalAgent:
                 "observation_image_channel": self.observation_image_channel,
                 "observation_depth_channel": self.observation_depth_channel,
                 "max_navigation_actions": self.max_navigation_actions,
+                "local_vln_watchdog_max_steps": local_step_cap or None,
                 "stationary_turn_action_limit": STATIONARY_TURN_ACTION_LIMIT,
                 "object_candidate_policy": {
                     "consecutive_attempt_limit": OBJECT_CANDIDATE_ATTEMPT_LIMIT,
-                    "local_step_limit": OBJECT_LOCAL_STEP_LIMIT,
                     "reset_distance_m": OBJECT_CANDIDATE_RESET_DISTANCE_M,
                 },
                 "model_retries": self.model_retries,
@@ -449,6 +445,17 @@ class NormalAgent:
                                     task_instructions,
                                     maximum=local_step_cap,
                                 )
+                                remaining_steps = (
+                                    self.max_navigation_actions - navigation_actions
+                                )
+                                if remaining_steps <= 0:
+                                    raise AgentToolPolicyError(
+                                        "navigation action budget is exhausted"
+                                    )
+                                requested_steps = min(
+                                    requested_steps, remaining_steps
+                                )
+                                arguments["max_steps"] = requested_steps
                                 local_is_object_candidate = (
                                     _mentions_object_category(
                                         arguments["instruction"], object_category
@@ -465,19 +472,6 @@ class NormalAgent:
                                     category=object_category,
                                     attempts=object_candidate_attempts,
                                 )
-                                if (
-                                    navigation_actions + requested_steps
-                                    > self.max_navigation_actions
-                                ):
-                                    remaining = (
-                                        self.max_navigation_actions
-                                        - navigation_actions
-                                    )
-                                    raise AgentToolPolicyError(
-                                        "local VLN call exceeds the remaining "
-                                        "navigation action budget: "
-                                        f"{remaining}"
-                                    )
                                 fresh_observation = False
                                 compact_images = True
                             elif canonical_name == "nav.goal.finish":
@@ -562,14 +556,6 @@ class NormalAgent:
                                     object_category = _object_category(
                                         next_goal.get("modality"),
                                         next_goal.get("public"),
-                                    )
-                                    local_step_cap = (
-                                        min(
-                                            tool_local_step_cap,
-                                            OBJECT_LOCAL_STEP_LIMIT,
-                                        )
-                                        if object_category is not None
-                                        else tool_local_step_cap
                                     )
                                     task_instructions.add(
                                         _instruction_key(next_goal.get("instruction"))
@@ -742,7 +728,7 @@ def _validate_local_instruction(
         raise AgentToolPolicyError(
             "local VLN instruction must state where to stop at the visible target"
         )
-    max_steps = arguments.get("max_steps")
+    max_steps = arguments.get("max_steps", maximum)
     if type(max_steps) is not int or not 1 <= max_steps <= maximum:
         raise AgentToolPolicyError(
             f"local max_steps must be an integer between 1 and {maximum}"
