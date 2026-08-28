@@ -89,6 +89,11 @@ Call nav.stop with status "completed" only after the final goal was accepted and
 Use status "failed" for genuine failure; never use "success" as a status. Never end a
 turn with plain text."""
 
+COMMENTARY_INSTRUCTIONS = """Before each tool-calling response, emit one brief
+user-visible commentary message stating the current navigation evidence and immediate
+next action. Keep it to one sentence. Commentary must accompany, never replace, the
+tool call."""
+
 
 REASONING_EFFORTS = frozenset(
     {"none", "minimal", "low", "medium", "high", "xhigh"}
@@ -117,6 +122,8 @@ class NormalAgent:
         max_iterations: int = 80,
         max_actions_per_turn: int = 4,
         reasoning_effort: str | None = None,
+        reasoning_summary: bool = False,
+        commentary: bool = False,
         observation_image_detail: str = "high",
         observation_image_channel: str = "rgb",
         observation_depth_channel: str = "depth",
@@ -135,6 +142,10 @@ class NormalAgent:
             raise ValueError("max_actions_per_turn must be between 1 and 4")
         if reasoning_effort is not None and reasoning_effort not in REASONING_EFFORTS:
             raise ValueError(f"unsupported reasoning_effort: {reasoning_effort}")
+        if type(reasoning_summary) is not bool:
+            raise ValueError("reasoning_summary must be a boolean")
+        if type(commentary) is not bool:
+            raise ValueError("commentary must be a boolean")
         if observation_image_detail not in {"low", "high", "auto"}:
             raise ValueError(
                 "observation_image_detail must be low, high, or auto"
@@ -157,9 +168,15 @@ class NormalAgent:
             raise ValueError("retry_backoff_s must not be negative")
         self.model = model
         self.instructions = _join_instructions(instructions, guidance)
+        if commentary:
+            self.instructions = _join_instructions(
+                self.instructions, COMMENTARY_INSTRUCTIONS
+            )
         self.max_iterations = max_iterations
         self.max_actions_per_turn = max_actions_per_turn
         self.reasoning_effort = reasoning_effort
+        self.reasoning_summary = reasoning_summary
+        self.commentary = commentary
         self.observation_image_detail = observation_image_detail
         self.observation_image_channel = observation_image_channel
         self.observation_depth_channel = observation_depth_channel
@@ -205,6 +222,8 @@ class NormalAgent:
                 "max_iterations": self.max_iterations,
                 "max_actions_per_turn": self.max_actions_per_turn,
                 "reasoning_effort": self.reasoning_effort,
+                "reasoning_summary": self.reasoning_summary,
+                "commentary": self.commentary,
                 "observation_image_detail": self.observation_image_detail,
                 "observation_image_channel": self.observation_image_channel,
                 "observation_depth_channel": self.observation_depth_channel,
@@ -290,8 +309,13 @@ class NormalAgent:
                     "parallel_tool_calls": self.max_actions_per_turn > 1,
                     "store": False,
                 }
-                if self.reasoning_effort is not None:
-                    request["reasoning"] = {"effort": self.reasoning_effort}
+                if self.reasoning_effort is not None or self.reasoning_summary:
+                    reasoning: dict[str, str] = {}
+                    if self.reasoning_effort is not None:
+                        reasoning["effort"] = self.reasoning_effort
+                    if self.reasoning_summary:
+                        reasoning["summary"] = "auto"
+                    request["reasoning"] = reasoning
                 trace(
                     "model.request",
                     iteration=iteration,
@@ -333,6 +357,21 @@ class NormalAgent:
 
                 output = list(response.output)
                 input_items.extend(output)
+                if self.reasoning_summary:
+                    summary = _reasoning_summary_text(output)
+                    if summary:
+                        trace(
+                            "model.reasoning_summary",
+                            iteration=iteration,
+                            text=summary,
+                        )
+                if self.commentary:
+                    for message in _commentary_messages(output):
+                        trace(
+                            "model.commentary",
+                            iteration=iteration,
+                            **message,
+                        )
                 calls = [item for item in output if item.type == "function_call"]
                 if not calls:
                     trace(
@@ -950,6 +989,53 @@ def _trace_data(value: Any) -> Any:
             if not str(key).startswith("_")
         }
     return {"type": type(value).__name__}
+
+
+def _reasoning_summary_text(output: Sequence[Any]) -> str:
+    parts: list[str] = []
+    for item in output:
+        item_data = _trace_data(item)
+        if not isinstance(item_data, Mapping) or item_data.get("type") != "reasoning":
+            continue
+        summary = item_data.get("summary")
+        if not isinstance(summary, Sequence) or isinstance(
+            summary, (str, bytes, bytearray)
+        ):
+            continue
+        parts.extend(_output_text_parts(summary, "summary_text"))
+    return "\n".join(parts)
+
+
+def _commentary_messages(output: Sequence[Any]) -> list[dict[str, Any]]:
+    messages: list[dict[str, Any]] = []
+    for item in output:
+        item_data = _trace_data(item)
+        if not isinstance(item_data, Mapping) or item_data.get("type") != "message":
+            continue
+        phase = item_data.get("phase")
+        if phase not in {None, "commentary"}:
+            continue
+        content = item_data.get("content")
+        if not isinstance(content, Sequence) or isinstance(
+            content, (str, bytes, bytearray)
+        ):
+            continue
+        text = "\n".join(_output_text_parts(content, "output_text"))
+        if text:
+            messages.append({"phase": phase or "commentary", "text": text})
+    return messages
+
+
+def _output_text_parts(parts: Sequence[Any], part_type: str) -> list[str]:
+    text: list[str] = []
+    for part in parts:
+        part_data = _trace_data(part)
+        if not isinstance(part_data, Mapping) or part_data.get("type") != part_type:
+            continue
+        value = part_data.get("text")
+        if isinstance(value, str) and value:
+            text.append(value)
+    return text
 
 
 def _accumulate_usage(total: dict[str, int], response: Any) -> None:

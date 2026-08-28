@@ -60,6 +60,21 @@ def function_call(call_id: str, name: str, arguments: dict[str, Any]) -> Any:
     )
 
 
+def reasoning_summary(text: str) -> Any:
+    return SimpleNamespace(
+        type="reasoning",
+        summary=[SimpleNamespace(type="summary_text", text=text)],
+    )
+
+
+def commentary(text: str) -> Any:
+    return SimpleNamespace(
+        type="message",
+        phase="commentary",
+        content=[SimpleNamespace(type="output_text", text=text)],
+    )
+
+
 def run(coroutine: Any) -> Any:
     return asyncio.run(coroutine)
 
@@ -144,6 +159,75 @@ def test_normal_agent_runs_native_responses_tool_loop() -> None:
         assert observation_output["type"] == "function_call_output"
         assert observation_output["call_id"] == "call-1"
         assert json.loads(observation_output["output"])["ok"] is True
+
+    run(scenario())
+
+
+def test_normal_agent_optionally_requests_and_records_model_explanations(
+    tmp_path,
+) -> None:
+    async def scenario() -> None:
+        responses = ScriptedResponses(
+            [
+                [
+                    reasoning_summary("The destination is already reached."),
+                    commentary("I can finish from the current position."),
+                    function_call(
+                        "stop",
+                        "nav__stop",
+                        {"status": "completed", "reason": "already there"},
+                    ),
+                ]
+            ]
+        )
+        agent = NormalAgent(
+            "test-model",
+            ("nav.observe",),
+            reasoning_effort="medium",
+            reasoning_summary=True,
+            commentary=True,
+            client=SimpleNamespace(responses=responses),
+        )
+        goal = NavGoal("goal", "remain at the marker")
+        task = NavTask("explanations", goal)
+        run_output = RunOutput(
+            {"root": str(tmp_path), "run_id": "explanations-run"},
+            resolved_config={},
+            config_sources=(),
+            config_digest="a" * 64,
+            provenance={},
+        )
+        episode = run_output.benchmark(0, "fixture", "test").episode(
+            0, "explanations", {"case_id": "explanations", "task": task}
+        )
+        result = await NavigationHarness(timeout_s=1).run_task(
+            task,
+            NavigationStack(agent, DummyNavigationEnvironment((goal,), targets=(0,))),
+            output=episode,
+        )
+        episode.finish({"terminal": result.terminal})
+
+        request = responses.requests[0]
+        assert request["reasoning"] == {"effort": "medium", "summary": "auto"}
+        assert "user-visible commentary message" in request["instructions"]
+
+        events = [
+            json.loads(line)
+            for line in (
+                episode.path / "components" / "agent.events.jsonl"
+            ).read_text().splitlines()
+        ]
+        summary_event = next(
+            event for event in events if event["type"] == "model.reasoning_summary"
+        )
+        commentary_event = next(
+            event for event in events if event["type"] == "model.commentary"
+        )
+        assert summary_event["text"] == "The destination is already reached."
+        assert commentary_event["iteration"] == 1
+        assert commentary_event["phase"] == "commentary"
+        assert commentary_event["text"] == "I can finish from the current position."
+        assert result.terminal.status == "completed"
 
     run(scenario())
 

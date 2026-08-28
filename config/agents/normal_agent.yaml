@@ -3,6 +3,8 @@ agent:
     params:
       model: gpt-5-mini
       max_iterations: 80
+      reasoning_summary: false
+      commentary: false
       tools:
         - nav.observe
         - nav.move.discrete
