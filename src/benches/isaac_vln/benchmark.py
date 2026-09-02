@@ -84,14 +84,15 @@ class IsaacVLNBenchmark(Benchmark):
             )
 
 
-def _instruction(raw: Mapping[str, Any], kind: str) -> str:
+def _instruction(raw: Mapping[str, Any], kind: str) -> dict[str, Any]:
     value = raw["instruction"]
     if isinstance(value, str):
-        return value.strip()
+        if value.strip():
+            return {"type": "instruction", "instruction": value.strip()}
     if isinstance(value, dict):
         for key in (kind, "instruction_text", "text", "formal"):
             if isinstance(value.get(key), str) and value[key].strip():
-                return value[key].strip()
+                return {"type": "instruction", "instruction": value[key].strip()}
     raise HarnessError(f"episode {raw.get('episode_id')} has no {kind} instruction")
 
 

@@ -95,6 +95,12 @@ class SessionEnvironment(EnvironmentModule):
         )
         register.register_reference(
             self.context.name,
+            "env.instruction",
+            self._current_instruction,
+            description="Current normalized navigation instruction.",
+        )
+        register.register_reference(
+            self.context.name,
             "env.pose",
             self._pose,
             description="Latest pose if exposed by the backend.",
@@ -149,6 +155,7 @@ class SessionEnvironment(EnvironmentModule):
             )
             return {
                 "observation_id": self._observation_id,
+                "instruction": self._current_instruction(),
                 "channels": channels,
                 "pose": self._pose(),
                 "action_count": len(self._actions),
@@ -200,12 +207,7 @@ class SessionEnvironment(EnvironmentModule):
             self._observation = observation
             self._capture_metrics(info)
             self._goal_index += 1
-            goals = self.context.episode.public.get("goals", ())
-            next_goal = (
-                goals[self._goal_index]
-                if isinstance(goals, Sequence) and self._goal_index < len(goals)
-                else None
-            )
+            next_goal = self._current_instruction() if not terminal else None
             if terminal:
                 self.finish("environment_terminal", "native environment ended", "env")
             return {
@@ -291,6 +293,16 @@ class SessionEnvironment(EnvironmentModule):
         if self.main_camera_channel is None:
             return None
         return self._observation.get(self.main_camera_channel)
+
+    def _current_instruction(self) -> dict[str, Any]:
+        instruction = self.context.episode.instruction
+        goals = instruction.get("goals")
+        if isinstance(goals, Sequence) and not isinstance(goals, (str, bytes)):
+            if self._goal_index >= len(goals):
+                return {}
+            if isinstance(goals[self._goal_index], Mapping):
+                return dict(goals[self._goal_index])
+        return dict(instruction)
 
     def _ensure_ready(self) -> None:
         if not self.wait_ready(0) or self._session is None:

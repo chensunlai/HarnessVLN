@@ -8,7 +8,7 @@ from domain import DomainRuntime, DomainSpec, ModuleSpec, NavigationEpisode, Wor
 def test_expert_domain_writes_complete_episode(tmp_path) -> None:
     episode = NavigationEpisode(
         "episode-1",
-        "Follow the route.",
+        {"type": "instruction", "instruction": "Follow the route."},
         truth={"expert_actions": ["forward", "left", "forward"]},
     )
     spec = DomainSpec(
@@ -32,7 +32,9 @@ def test_expert_domain_writes_complete_episode(tmp_path) -> None:
 
 
 def test_arbitrary_modules_call_each_other_across_threads(tmp_path) -> None:
-    episode = NavigationEpisode("services", "Exercise module services.")
+    episode = NavigationEpisode(
+        "services", {"type": "instruction", "instruction": "Exercise module services."}
+    )
     spec = DomainSpec(
         ModuleSpec("env", "envs.replay:ReplayEnvironment"),
         ModuleSpec("metric", "metrics.navigation:NavigationMetric"),

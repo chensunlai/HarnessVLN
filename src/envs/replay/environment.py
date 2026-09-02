@@ -57,6 +57,12 @@ class ReplayEnvironment(EnvironmentModule):
         )
         register.register_reference(
             self.context.name,
+            "env.instruction",
+            lambda: dict(self.context.episode.instruction),
+            description="Current normalized navigation instruction.",
+        )
+        register.register_reference(
+            self.context.name,
             "env.pose",
             lambda: list(self._pose),
             description="Current Replay pose.",
@@ -77,7 +83,7 @@ class ReplayEnvironment(EnvironmentModule):
             self._observation_id += 1
             return {
                 "observation_id": self._observation_id,
-                "instruction": self.context.episode.instruction,
+                "instruction": dict(self.context.episode.instruction),
                 "pose": list(self._pose),
                 "step_count": len(self._actions),
             }

@@ -14,7 +14,7 @@ JsonObject = dict[str, Any]
 @dataclass(frozen=True, slots=True)
 class NavigationEpisode:
     episode_id: str
-    instruction: str
+    instruction: Mapping[str, Any]
     scene_id: str | None = None
     public: Mapping[str, Any] = field(default_factory=dict)
     setup: Mapping[str, Any] = field(default_factory=dict)
@@ -23,8 +23,9 @@ class NavigationEpisode:
     def __post_init__(self) -> None:
         if not self.episode_id.strip():
             raise HarnessError("episode_id must not be empty")
-        if not self.instruction.strip():
-            raise HarnessError("instruction must not be empty")
+        if not isinstance(self.instruction, Mapping):
+            raise HarnessError("instruction must be an object")
+        object.__setattr__(self, "instruction", dict(self.instruction))
         object.__setattr__(self, "public", dict(self.public))
         object.__setattr__(self, "setup", dict(self.setup))
         object.__setattr__(self, "truth", dict(self.truth))
@@ -32,7 +33,7 @@ class NavigationEpisode:
     def as_dict(self, *, include_truth: bool = True) -> JsonObject:
         value: JsonObject = {
             "episode_id": self.episode_id,
-            "instruction": self.instruction,
+            "instruction": dict(self.instruction),
             "scene_id": self.scene_id,
             "public": dict(self.public),
             "setup": dict(self.setup),

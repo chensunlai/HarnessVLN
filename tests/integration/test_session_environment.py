@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import json
+
 from domain import DomainRuntime, DomainSpec, ModuleSpec, NavigationEpisode
 
 
 def test_async_native_session_is_normalized(tmp_path) -> None:
     episode = NavigationEpisode(
         "async-session",
-        "Move forward twice.",
+        {"type": "instruction", "instruction": "Move forward twice."},
         truth={"expert_actions": ["forward", "forward"]},
     )
     environment = ModuleSpec(
@@ -44,11 +46,11 @@ def test_async_native_session_is_normalized(tmp_path) -> None:
 def test_multi_goal_session_stays_in_one_domain(tmp_path) -> None:
     episode = NavigationEpisode(
         "multi-goal",
-        "Complete both goals.",
-        public={
+        {
+            "type": "goals",
             "goals": [
-                {"goal_id": "one", "instruction": "First."},
-                {"goal_id": "two", "instruction": "Second."},
+                {"type": "target_text", "instruction": "chair"},
+                {"type": "target_img", "image": "goal.png"},
             ]
         },
     )
@@ -81,12 +83,23 @@ def test_multi_goal_session_stays_in_one_domain(tmp_path) -> None:
     assert result.environment["goal_index"] == 2
     assert result.metrics == {"goals_completed": 2.0, "success": 1.0}
     assert not result.errors
+    goals = json.loads(
+        (tmp_path / "multi-goal/workspace/modules/driver/goals.json").read_text()
+    )
+    assert goals["initial"]["instruction"] == {
+        "type": "target_text",
+        "instruction": "chair",
+    }
+    assert goals["next"]["instruction"] == {
+        "type": "target_img",
+        "image": "goal.png",
+    }
 
 
 def test_isaac_high_level_action_waits_for_native_ticks(tmp_path) -> None:
     episode = NavigationEpisode(
         "isaac-ticks",
-        "Move forward.",
+        {"type": "instruction", "instruction": "Move forward."},
         truth={"expert_actions": ["forward"]},
     )
     spec = DomainSpec(

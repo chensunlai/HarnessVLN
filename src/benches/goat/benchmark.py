@@ -44,7 +44,7 @@ class GOATBenchmark(Benchmark):
                 goals, truth = _goals(episode_id, str(raw["scene_id"]), raw["tasks"], table)
                 yield NavigationEpisode(
                     episode_id,
-                    str(goals[0]["instruction"]),
+                    {"type": "goals", "goals": [dict(goal) for goal in goals]},
                     str(raw["scene_id"]),
                     {"split": self.split, "goal_count": len(goals), "goals": goals},
                     {
@@ -82,25 +82,20 @@ def _goals(
         selected = next(
             (item for item in instances if item.get("object_id") == object_id), None
         )
+        instruction: dict[str, Any]
         if modality == "object":
-            instruction = f"Find the {category}."
+            instruction = {"type": "target_text", "instruction": str(category)}
         elif modality == "description":
-            instruction = str((selected or {}).get("lang_desc", "")).strip()
+            text = str((selected or {}).get("lang_desc", "")).strip()
+            if not text:
+                raise HarnessError(f"GOAT task {index} in {episode_id} has no instruction")
+            instruction = {"type": "target_text", "instruction": text}
         elif modality == "image":
-            instruction = "Navigate to the object shown in the goal image."
+            instruction = {"type": "target_img", "image": None}
         else:
             raise HarnessError(f"unknown GOAT modality {modality!r}")
-        if not instruction:
-            raise HarnessError(f"GOAT task {index} in {episode_id} has no instruction")
         goal_id = f"{episode_id}:goal:{index}"
-        public.append(
-            {
-                "goal_id": goal_id,
-                "instruction": instruction,
-                "modality": modality,
-                "category": category,
-            }
-        )
+        public.append(instruction)
         truth.append(
             {
                 "goal_id": goal_id,

@@ -58,7 +58,7 @@ class R2RCEBenchmark(Benchmark):
             }
             yield NavigationEpisode(
                 episode_id,
-                instruction.strip(),
+                {"type": "instruction", "instruction": instruction.strip()},
                 str(raw["scene_id"]),
                 {"split": self.split},
                 setup,

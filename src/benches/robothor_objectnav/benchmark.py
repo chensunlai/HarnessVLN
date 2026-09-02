@@ -46,7 +46,7 @@ class RoboTHORObjectNavBenchmark(Benchmark):
                 category = str(raw["object_type"])
                 yield NavigationEpisode(
                     episode_id,
-                    f"Find the {category}.",
+                    {"type": "target_text", "instruction": category},
                     str(raw["scene"]),
                     {"split": self.split, "category": category},
                     {

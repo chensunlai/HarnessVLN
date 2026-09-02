@@ -41,6 +41,17 @@ to provider-safe `env__step` names and returns the reverse map for native
 onto the owning module thread, so simulator and GPU runtime thread affinity is
 preserved without exposing queues or an event protocol to callers.
 
+`NavigationEpisode.instruction` is an open mapping. Core code does not prescribe
+or validate its keys. Built-in Bench adapters use `type: instruction` for a route
+description such as R2R, `type: target_text` for a text-specified target, and
+`type: target_img` for an image target. Text payloads use `instruction`; image
+payloads use `image`. `goals` holds an ordered sequence of those mappings for a
+composite task such as GOAT, whose outer mapping uses `type: goals`. Bench-specific
+extensions may add keys without changing Domain. Env exposes the current mapping
+as `env.instruction` and includes it in `env.observe`. A dynamic `image` may be
+`null` in the dataset-side episode until its Env adapter supplies the rendered
+target.
+
 Env must expose `env.step` and owns the canonical, idempotent `env.stop`.
 Completion, timeout, native termination, and module failure all converge on the
 same terminal state. Metric evaluates the frozen Env result. No Agent, VLN, or

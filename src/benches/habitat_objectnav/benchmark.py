@@ -74,7 +74,7 @@ class HabitatObjectNavBenchmark(Benchmark):
                         setup[name] = raw[name]
                 yield NavigationEpisode(
                     episode_id,
-                    f"Find the {category}.",
+                    {"type": "target_text", "instruction": category},
                     str(raw["scene_id"]),
                     {"split": self.split, "dataset": self.dataset, "category": category},
                     setup,

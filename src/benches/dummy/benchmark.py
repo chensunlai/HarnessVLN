@@ -34,7 +34,10 @@ class DummyBenchmark(Benchmark):
             episode_id = f"dummy:{self.split}:{index}"
             yield NavigationEpisode(
                 episode_id,
-                "Follow the reference route to the destination.",
+                {
+                    "type": "instruction",
+                    "instruction": "Follow the reference route to the destination.",
+                },
                 scene_id="dummy-grid",
                 public={"split": self.split},
                 setup={"start_pose": [0, 0, 0]},
