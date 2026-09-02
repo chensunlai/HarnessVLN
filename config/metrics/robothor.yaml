@@ -1,0 +1,6 @@
+metric:
+  factory: metrics.navigation:NavigationMetric
+  params:
+    fields:
+      sr: success
+      spl: spl

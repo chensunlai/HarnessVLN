@@ -1,0 +1,3 @@
+metric:
+  factory: metrics.goat:GOATMetric
+  params: {}
