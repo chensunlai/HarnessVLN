@@ -1,0 +1,13 @@
+environment:
+  factory: envs.habitat:HabitatEnvironment
+  params:
+    config_path: config/envs/habitat/r2r_native.yaml
+    source_root: cache/upstream/habitat_lab
+    native_actions:
+      forward: 1
+      turn_left: 2
+      turn_right: 3
+    terminal_action: 0
+    observation_channels: [rgb, depth, gps, compass]
+    main_camera_channel: rgb
+    max_steps: 500

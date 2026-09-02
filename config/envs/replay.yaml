@@ -1,0 +1,4 @@
+environment:
+  factory: envs.replay:ReplayEnvironment
+  params:
+    max_steps: 256

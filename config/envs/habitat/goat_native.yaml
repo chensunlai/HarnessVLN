@@ -1,0 +1,32 @@
+# @package _global_
+defaults:
+  - /benchmark/nav/objectnav/objectnav_hm3d
+  - _self_
+
+habitat:
+  environment:
+    max_episode_steps: 5000
+  dataset:
+    type: Goat-v1
+    split: val_unseen
+    data_path: data/datasets/goat_bench/hm3d/v1/{split}/{split}.json.gz
+    scenes_dir: data/scene_datasets
+  task:
+    type: Goat-v1
+  simulator:
+    type: Sim-v0
+    turn_angle: 30
+    default_agent_navmesh: true
+    habitat_sim_v0:
+      gpu_device_id: 0
+    agents:
+      main_agent:
+        height: 1.41
+        radius: 0.17
+        max_climb: 0.20
+        sim_sensors:
+          rgb_sensor:
+            width: 360
+            height: 640
+            hfov: 42
+            position: [0, 1.31, 0]

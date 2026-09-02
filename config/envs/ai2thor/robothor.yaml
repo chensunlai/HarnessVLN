@@ -1,0 +1,14 @@
+environment:
+  factory: envs.ai2thor:RoboTHOREnvironment
+  params:
+    controller_params:
+      commit_id: bad5bc2b250615cb766ffb45d455c211329af17e
+      width: 640
+      height: 480
+      rotateStepDegrees: 30
+      visibilityDistance: 1.0
+      gridSize: 0.25
+      agentMode: locobot
+      fieldOfView: 63.453048374758716
+      renderDepthImage: true
+    max_steps: 500

@@ -1,0 +1,19 @@
+environment:
+  factory: envs.habitat:HabitatEnvironment
+  params:
+    config_path: config/envs/habitat/goat_native.yaml
+    source_roots:
+      - cache/upstream/habitat_lab
+      - cache/upstream/goat_bench
+    bootstrap: [goat_bench]
+    native_actions:
+      forward: move_forward
+      turn_left: turn_left
+      turn_right: turn_right
+      look_up: look_up
+      look_down: look_down
+    goal_action: subtask_stop
+    terminal_action: null
+    observation_channels: [rgb, depth, gps, compass]
+    main_camera_channel: rgb
+    max_steps: 5000
