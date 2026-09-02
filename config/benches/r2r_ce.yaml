@@ -1,0 +1,8 @@
+bench:
+  id: r2r_ce
+  factory: benches.r2r_ce:R2RCEBenchmark
+  params:
+    root: data/datasets/r2r
+    split: val_unseen
+  environment: ../envs/habitat/r2r.yaml
+  metric: ../metrics/r2r_ce.yaml

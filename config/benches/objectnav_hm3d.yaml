@@ -1,0 +1,9 @@
+bench:
+  id: objectnav_hm3d
+  factory: benches.habitat_objectnav:HabitatObjectNavBenchmark
+  params:
+    root: data/datasets/objectnav/hm3d/v2
+    dataset: hm3d
+    split: val
+  environment: ../envs/habitat/objectnav_hm3d.yaml
+  metric: ../metrics/objectnav.yaml

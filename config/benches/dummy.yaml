@@ -1,0 +1,7 @@
+bench:
+  id: dummy
+  factory: benches.dummy:DummyBenchmark
+  params:
+    split: smoke
+  environment: ../envs/replay.yaml
+  metric: ../metrics/navigation.yaml

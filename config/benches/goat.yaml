@@ -1,0 +1,8 @@
+bench:
+  id: goat
+  factory: benches.goat:GOATBenchmark
+  params:
+    root: data/datasets/goat_bench/hm3d/v1
+    split: val_unseen
+  environment: ../envs/habitat/goat.yaml
+  metric: ../metrics/goat.yaml

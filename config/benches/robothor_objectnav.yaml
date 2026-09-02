@@ -1,0 +1,8 @@
+bench:
+  id: robothor_objectnav
+  factory: benches.robothor_objectnav:RoboTHORObjectNavBenchmark
+  params:
+    root: data/datasets/robothor-objectnav-2021
+    split: val
+  environment: ../envs/ai2thor/robothor.yaml
+  metric: ../metrics/robothor.yaml
