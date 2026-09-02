@@ -1,0 +1,4 @@
+module:
+  name: expert
+  factory: modules.expert:ExpertTrajectoryModule
+  params: {}
