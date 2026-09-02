@@ -1,0 +1,7 @@
+runner:
+  domain: ../domains/expert.yaml
+  benches:
+    - ../benches/dummy.yaml
+  output_root: ../../runs/fabric
+  workers:
+    count: 2

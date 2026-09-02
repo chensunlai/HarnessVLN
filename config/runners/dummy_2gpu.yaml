@@ -1,0 +1,8 @@
+runner:
+  domain: ../domains/expert.yaml
+  benches:
+    - ../benches/dummy.yaml
+  output_root: ../../runs/fabric
+  workers:
+    devices: [0, 1]
+    per_device: 1
