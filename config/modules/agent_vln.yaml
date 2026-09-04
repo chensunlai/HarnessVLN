@@ -1,0 +1,4 @@
+module:
+  name: agent_vln
+  factory: modules.agent_vln:AgentVLNModule
+  params: {}
