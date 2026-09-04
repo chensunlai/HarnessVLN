@@ -65,7 +65,7 @@ SPL ambiguous.
 After activating the project Python environment:
 
 ```bash
-python -m datasets.agent_vln.build \
+PYTHONPATH=src python -m utils.datasets.agent_vln.build \
   --source data/datasets/r2r/train/train.json \
   --scenes-root data/scene_datasets \
   --output data/generated/agent_vln_r2r_local_v1 \
