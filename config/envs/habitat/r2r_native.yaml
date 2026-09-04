@@ -26,4 +26,10 @@ habitat:
       main_agent:
         sim_sensors:
           rgb_sensor: {width: 640, height: 480, hfov: 79}
-          depth_sensor: {width: 640, height: 480, hfov: 79}
+          depth_sensor:
+            width: 640
+            height: 480
+            hfov: 79
+            min_depth: 0.1
+            max_depth: 10.0
+            normalize_depth: false

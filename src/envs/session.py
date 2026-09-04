@@ -43,6 +43,7 @@ class SessionEnvironment(EnvironmentModule):
         self._actions: list[str] = []
         self._observation_id = 0
         self._goal_index = 0
+        self._final_pose: Any = None
         self._lock = threading.RLock()
         self._stopped = False
 
@@ -192,6 +193,7 @@ class SessionEnvironment(EnvironmentModule):
                 observation, _, info = self._native_step(self.terminal_action)
                 self._observation = observation
                 self._capture_metrics(info)
+            self._final_pose = self._pose()
             native_stop = getattr(self._session, "stop", None)
             if callable(native_stop):
                 _resolve(native_stop())
@@ -230,7 +232,7 @@ class SessionEnvironment(EnvironmentModule):
             "action_count": len(self._actions),
             "actions": list(self._actions),
             "goal_index": self._goal_index,
-            "final_pose": self._pose(),
+            "final_pose": self._final_pose if self._final_pose is not None else self._pose(),
             "stopped": self._stopped,
         }
 
