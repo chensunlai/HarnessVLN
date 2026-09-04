@@ -1,0 +1,4 @@
+module:
+  name: agent_local
+  factory: modules.agent_local:AgentLocalModule
+  params: {}
