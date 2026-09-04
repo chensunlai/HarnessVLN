@@ -1,0 +1,4 @@
+module:
+  name: master_agent
+  factory: modules.master_agent:MasterAgent
+  params: {}

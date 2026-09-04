@@ -1,0 +1,7 @@
+runner:
+  domain: ../domains/agentic_navigation.yaml
+  benches:
+    - ../benches/dummy.yaml
+  output_root: ../../runs/agentic_navigation_dummy
+  workers:
+    count: 1
