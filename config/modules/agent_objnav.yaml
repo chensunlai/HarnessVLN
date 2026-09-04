@@ -1,0 +1,4 @@
+module:
+  name: agent_objnav
+  factory: modules.agent_objnav:AgentObjNavModule
+  params: {}
