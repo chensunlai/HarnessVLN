@@ -1,0 +1,9 @@
+domain:
+  modules:
+    - ../modules/normal_agent_qwen38.yaml
+  workspace:
+    python: python
+    command_timeout_s: 30
+    max_output_chars: 200000
+  timeout_s: 1800
+  shutdown_timeout_s: 10

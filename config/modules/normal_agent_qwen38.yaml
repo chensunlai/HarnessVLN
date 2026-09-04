@@ -1,0 +1,17 @@
+module:
+  name: normal_agent
+  factory: modules.normal_agent:NormalAgent
+  params:
+    model: Qwen3.8-27B
+    reasoning_effort: xhigh
+    max_iterations: 80
+    max_actions: 160
+    minimum_travel_m: 2.5
+    image_memory_turns: 6
+    history_checkpoints: 24
+    image_detail: high
+    model_retries: 2
+    retry_backoff_s: 2.0
+    tools:
+      - env.observe
+      - env.step

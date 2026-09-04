@@ -1,0 +1,8 @@
+runner:
+  domain: ../domains/normal_agent_qwen38.yaml
+  benches:
+    - ../benches/r2r_ce_first_100.yaml
+  output_root: ../../runs/fabric_qwen38
+  workers:
+    devices: [0, 1]
+    per_device: 2
