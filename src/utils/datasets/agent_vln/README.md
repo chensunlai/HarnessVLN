@@ -105,7 +105,9 @@ PYTHONPATH=src python -m utils.datasets.agent_vln.pipeline render \
 The rewrite stage sends the ordered images and all source human annotations to
 the Responses API. It requests `gpt-5.6-terra` with high reasoning and returns
 exactly one `concise`, one `natural`, and one `landmark_rich` instruction per
-route. A strict JSON schema and local validation enforce style count, word
+route. Generated clauses retain the annotated route geometry but omit
+unsupported landmarks and distinguish leaving the current room from entering a
+new one. A strict JSON schema and local validation enforce style count, word
 bounds, uniqueness, and the absence of explicit image or dataset references.
 Set the standard `OPENAI_API_KEY` and, when needed, `OPENAI_BASE_URL` environment
 variables before running it; credentials are neither read from local config
@@ -150,11 +152,14 @@ PYTHONPATH=src python -m utils.datasets.agent_vln.pipeline rewrite \
   --output data/generated/agent_vln_r2r_local_v2 \
   --model gpt-5.6-terra \
   --reasoning-effort high \
-  --final-routes 100
+  --final-routes 100 \
+  --min-final-distance 4.5
 ```
 
 The final split remains `60/20/20`, preserves the original scene-disjoint
-assignment and route-pattern balance, and contains 300 episodes. `curation.json`
-records every excluded conflict and unused reserve. Re-running generation with
+assignment and route-pattern balance, and contains 300 episodes. Requiring a
+4.5 m source geodesic lower bound makes that value a valid minimum-progress
+guard during this dataset's evaluation. `curation.json` records the bound,
+every excluded conflict, and unused reserves. Re-running generation with
 unchanged images, prompt version, model, and effort reuses validated cached
 responses.

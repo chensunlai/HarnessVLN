@@ -6,6 +6,7 @@ from utils.datasets.agent_vln.pipeline import (
     Candidate,
     InstructionVariant,
     RewriteJob,
+    _initial_alignment,
     _route_geometry,
     _tokenize,
     collect_candidates,
@@ -16,6 +17,7 @@ from utils.datasets.agent_vln.pipeline import (
     split_sizes,
     uniform_indices,
     validate_generation,
+    validate_route_generation,
 )
 
 
@@ -102,6 +104,10 @@ def test_route_selection_primitives() -> None:
         candidates[0].semantic_tags
     )
     assert _route_geometry(_episode(1, "Walk forward."))["initial_turn_degrees"] == 90
+    assert _initial_alignment(_episode(1, "Walk forward.")) == {
+        "direction": "right",
+        "degrees": 90.0,
+    }
     assert [instruction_style(n) for n in (14, 15, 26)] == [
         "concise",
         "standard",
@@ -165,6 +171,13 @@ def test_generation_validation_and_tokenization() -> None:
     vocabulary = {"UNK_INDEX": 1, "word2idx_dict": {"go": 10, "left": 11, ".": 12}}
     assert _tokenize("Go left.", vocabulary) == [10, 11, 12]
 
+    value = _generation()
+    with pytest.raises(ValueError, match="initial right turn"):
+        validate_route_generation(value, _episode(1, "Walk forward."))
+    for item in value["instructions"]:
+        item["text"] = "Turn right, " + item["text"][0].lower() + item["text"][1:]
+    assert validate_route_generation(value, _episode(1, "Walk forward."))
+
 
 def test_final_selection_replaces_conflicts_with_same_pattern() -> None:
     jobs = [
@@ -173,6 +186,7 @@ def test_final_selection_replaces_conflicts_with_same_pattern() -> None:
                 "episode_id": f"agent_vln:{split}:{pattern}:{index}",
                 "split": split,
                 "route_pattern": pattern,
+                "geometry": {"source_geodesic_distance_m": 4.0 + index / 4},
             },
             {},
             {},
@@ -180,7 +194,7 @@ def test_final_selection_replaces_conflicts_with_same_pattern() -> None:
         )
         for split in ("debug", "dev", "test")
         for pattern in ("low_turn", "one_turn", "two_turn")
-        for index in range(3)
+        for index in range(4)
     ]
     generations = {
         job.route_id: {
@@ -192,7 +206,10 @@ def test_final_selection_replaces_conflicts_with_same_pattern() -> None:
         }
         for job in jobs
     }
-    selected, curation = select_final_jobs(jobs, generations, count=9)
+    selected, curation = select_final_jobs(
+        jobs, generations, count=9, min_distance=4.5
+    )
     assert len(selected) == 9
-    assert all(not job.route_id.endswith(":0") for job in selected)
+    assert all(job.route_id.rsplit(":", 1)[1] in {"2", "3"} for job in selected)
     assert len(curation["excluded_conflicts"]) == 9
+    assert curation["minimum_geodesic_distance_m"] == 4.5

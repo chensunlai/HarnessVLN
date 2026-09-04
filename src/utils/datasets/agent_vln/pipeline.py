@@ -156,6 +156,22 @@ def _initial_turn_angle(
     return math.degrees(math.acos(max(-1.0, min(1.0, cosine))))
 
 
+def _initial_alignment(episode: Mapping[str, Any]) -> dict[str, Any]:
+    path = episode.get("reference_path")
+    if not isinstance(path, list) or len(path) < 2:
+        raise ValueError("reference_path must contain at least two points")
+    rotation = episode.get("start_rotation")
+    if not isinstance(rotation, Sequence) or len(rotation) != 4:
+        raise ValueError("start_rotation must be an [x, y, z, w] quaternion")
+    x, y, z, w = (float(value) for value in rotation)
+    forward = (-2.0 * (x * z + y * w), -(1.0 - 2.0 * (x * x + y * y)))
+    segment = (path[1][0] - path[0][0], path[1][2] - path[0][2])
+    angle = _initial_turn_angle(episode, path)
+    cross = forward[0] * segment[1] - forward[1] * segment[0]
+    direction = "straight" if angle < 15.0 else "right" if cross > 0 else "left"
+    return {"direction": direction, "degrees": round(angle, 3)}
+
+
 def _route_geometry(episode: Mapping[str, Any]) -> dict[str, Any]:
     path = episode.get("reference_path")
     if not isinstance(path, list) or len(path) < 2:
@@ -1149,7 +1165,7 @@ def _quiet_native_output(enabled: bool) -> Iterator[None]:
 
 
 
-PROMPT_VERSION = "agent_vln_rewrite_v1"
+PROMPT_VERSION = "agent_vln_rewrite_v3"
 STYLE_ORDER = ("concise", "natural", "landmark_rich")
 STYLE_LIMITS = {
     "concise": (6, 22),
@@ -1179,21 +1195,34 @@ true starting heading. Intermediate images face the next route segment, and the 
 image faces the arrival direction. Black regions can be missing Matterport scan data;
 ignore them.
 
-The human instructions collectively define the route, action order, turn direction,
-and endpoint. Use images only to clarify visually supported rooms and landmarks. Do
-not invent an object, doorway, turn, room transition, or destination. If annotations
-differ in wording, preserve their shared route meaning. Write commands executable by
-an agent starting at the first image. Never mention images, frames, coordinates,
-waypoints, datasets, or annotations.
+The human instructions propose the route, action order, and endpoint. The supplied
+initial_alignment is computed from the annotated start pose and first route segment;
+it is authoritative. Include its left or right turn when it is not straight, even if
+the first RGB sample alone makes several openings plausible. The ordered RGB samples
+determine which room and landmark wording is visually executable. Retain the shared
+route geometry but omit a room, object, or relation that the samples do not support.
+Prefer a supported transition or landmark in its place. Never instruct the agent to
+search for an unseen landmark merely because one annotation names it.
+
+Resolve viewpoint semantics carefully. A room named in an annotation may be the room
+the agent is already leaving, not another room it must enter. Describe it that way when
+the first sample and route order support that reading. Every generated clause must move
+the agent forward along the sampled route rather than into a plausible side opening.
+When initial_alignment requires a turn, never call the competing initial forward view
+"ahead" or direct the agent into it.
+Do not invent an object, doorway, turn, room transition, or destination. Write commands
+executable by an agent starting at the first sample. Never mention images, frames,
+coordinates, waypoints, datasets, or annotations.
 
 Return exactly three semantically equivalent instructions with distinct styles:
 - concise: 6-22 words, direct imperative, only essential turns and endpoint;
 - natural: 12-36 words, fluent directions a person would naturally give;
 - landmark_rich: 20-52 words, ordered steps with only clearly supported landmarks.
 
-Assess whether the sampled views and human annotations are sufficiently consistent.
-Use partially_grounded when some textual landmark is outside the sampled view but the
-route itself remains consistent. Use conflict only for a material route contradiction.
+Assess the generated instructions, rather than every detail in the source wording. Use
+grounded when all facts retained in the generated instructions are supported. Use
+partially_grounded only when an essential route transition remains visually ambiguous,
+and conflict only when no faithful executable rewrite can resolve a material mismatch.
 """
 
 OUTPUT_SCHEMA = {
@@ -1318,6 +1347,19 @@ def validate_generation(value: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def validate_route_generation(
+    value: Mapping[str, Any], episode: Mapping[str, Any]
+) -> dict[str, Any]:
+    result = validate_generation(value)
+    direction = _initial_alignment(episode)["direction"]
+    if direction != "straight" and any(
+        not re.search(rf"\b{direction}\b", item["text"], re.I)
+        for item in result["instructions"]
+    ):
+        raise ValueError(f"every instruction must retain the initial {direction} turn")
+    return result
+
+
 def _job_fingerprint(
     route: Mapping[str, Any], frame_manifest: Mapping[str, Any]
 ) -> str:
@@ -1419,6 +1461,7 @@ def _request_input(
     source = {
         "route_id": job.route_id,
         "approximate_distance_m": route["geometry"]["source_geodesic_distance_m"],
+        "initial_alignment": _initial_alignment(job.episode),
         "route_pattern": route["route_pattern"],
         "human_instructions": [
             item["text"] for item in route["instruction_variants"]
@@ -1483,7 +1526,11 @@ async def _generate_one(
         reasoning_effort=reasoning_effort,
     )
     if cached is not None:
-        return cached
+        try:
+            validate_route_generation(cached["result"], job.episode)
+            return cached
+        except (KeyError, TypeError, ValueError):
+            pass
 
     feedback: str | None = None
     for attempt in range(retries + 1):
@@ -1517,7 +1564,7 @@ async def _generate_one(
             output_text = getattr(response, "output_text", "")
             if not output_text:
                 raise ValueError("response has no output_text")
-            result = validate_generation(json.loads(output_text))
+            result = validate_route_generation(json.loads(output_text), job.episode)
             record = {
                 "schema_version": 1,
                 "route_id": job.route_id,
@@ -1634,6 +1681,7 @@ def select_final_jobs(
     generations: Mapping[str, Mapping[str, Any]],
     *,
     count: int,
+    min_distance: float = 0.0,
 ) -> tuple[list[RewriteJob], Mapping[str, Any]]:
     sizes = split_sizes(count)
     selected: list[RewriteJob] = []
@@ -1653,13 +1701,20 @@ def select_final_jobs(
                 for job in jobs
                 if job.split == split
                 and job.route["route_pattern"] == pattern
+                and float(
+                    job.route.get("geometry", {}).get(
+                        "source_geodesic_distance_m", 0.0
+                    )
+                )
+                >= min_distance
                 and generations[job.route_id]["result"]["route_check"]["status"]
                 != "conflict"
             ]
             if len(eligible) < target:
                 raise ValueError(
-                    f"only {len(eligible)} non-conflict routes for split={split}, "
-                    f"pattern={pattern}; need {target}"
+                    f"only {len(eligible)} eligible routes for split={split}, "
+                    f"pattern={pattern}, minimum_distance={min_distance}; "
+                    f"need {target}"
                 )
             for job in eligible[:target]:
                 selected.append(job)
@@ -1672,8 +1727,10 @@ def select_final_jobs(
     ]
     curation = {
         "policy": (
-            "exclude generator-reviewed conflicts and preserve split/pattern quotas"
+            "exclude generator-reviewed conflicts and routes below the minimum "
+            "distance, then preserve split/pattern quotas"
         ),
+        "minimum_geodesic_distance_m": min_distance,
         "candidate_routes": len(jobs),
         "selected_routes": len(selected),
         "required_patterns": required,
@@ -1804,7 +1861,12 @@ def materialize(
 
 
 def _rewrite(args: argparse.Namespace) -> Mapping[str, Any]:
-    if args.concurrency < 1 or args.retries < 0 or args.retry_backoff < 0:
+    if (
+        args.concurrency < 1
+        or args.retries < 0
+        or args.retry_backoff < 0
+        or args.min_final_distance < 0
+    ):
         raise ValueError("concurrency must be positive and retry settings non-negative")
     input_root, output_root = args.input.resolve(), args.output.resolve()
     jobs = load_jobs(input_root, output_root, limit=args.limit)
@@ -1819,7 +1881,12 @@ def _rewrite(args: argparse.Namespace) -> Mapping[str, Any]:
         return {"generated": len(generated), "selected": len(jobs), "materialized": False}
     curation = None
     if args.final_routes is not None:
-        jobs, curation = select_final_jobs(jobs, generated, count=args.final_routes)
+        jobs, curation = select_final_jobs(
+            jobs,
+            generated,
+            count=args.final_routes,
+            min_distance=args.min_final_distance,
+        )
         _write_json(output_root / "curation.json", curation)
     return materialize(
         jobs,
@@ -1898,6 +1965,7 @@ def _parser() -> argparse.ArgumentParser:
     command.add_argument("--retry-backoff", type=float, default=2.0)
     command.add_argument("--limit", type=int)
     command.add_argument("--final-routes", type=int)
+    command.add_argument("--min-final-distance", type=float, default=0.0)
     command.set_defaults(handler=_rewrite)
     return parser
 
