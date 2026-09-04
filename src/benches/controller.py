@@ -56,7 +56,8 @@ class BenchSummary:
             or any(
                 record.error
                 or record.result is None
-                or record.result.terminal.status not in {"completed", "environment_terminal"}
+                or record.result.terminal.status
+                not in {"completed", "environment_terminal"}
                 or record.result.errors
                 for record in self.records
             )
@@ -72,10 +73,16 @@ class BenchSummary:
             "error": self.error,
             "counts": {
                 "episodes": len(self.records),
-                "errors": sum(record.error is not None for record in self.records),
+                "errors": sum(
+                    record.error is not None
+                    or record.result is None
+                    or bool(record.result.errors)
+                    for record in self.records
+                ),
                 "task_failures": sum(
                     record.result is not None
-                    and record.result.terminal.status not in {"completed", "environment_terminal"}
+                    and record.result.terminal.status
+                    not in {"completed", "environment_terminal"}
                     for record in self.records
                 ),
             },
@@ -117,7 +124,9 @@ class BenchmarkController:
         ]
 
     def finish(self, records: tuple[DomainRecord, ...]) -> BenchSummary:
-        results = tuple(record.result for record in records if record.result is not None)
+        results = tuple(
+            record.result for record in records if record.result is not None
+        )
         error: str | None = None
         metrics: dict[str, float] = {}
         try:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import multiprocessing
 import re
+import sys
 import time
 import uuid
 from concurrent.futures import FIRST_COMPLETED, Future, ProcessPoolExecutor, wait
@@ -30,7 +31,7 @@ class Runner:
         controllers, jobs = self._jobs(config, run_root)
         tracker = _Progress(len(jobs), enabled=progress)
         try:
-            records = self._execute(jobs, config.workers, tracker.update)
+            records = self._execute(jobs, config.workers, tracker)
         finally:
             tracker.close()
 
@@ -85,7 +86,7 @@ class Runner:
     def _execute(
         jobs: list[DomainJob],
         workers: tuple[WorkerConfig, ...],
-        completed: Any,
+        tracker: _Progress,
     ) -> list[DomainRecord]:
         if not jobs:
             return []
@@ -102,6 +103,7 @@ class Runner:
         iterator = iter(jobs)
         active: dict[Future[DomainRecord], tuple[int, DomainJob]] = {}
         records: list[DomainRecord] = []
+        aborted = False
         try:
             for slot, executor in enumerate(executors):
                 try:
@@ -111,6 +113,8 @@ class Runner:
                 active[executor.submit(execute_job, job)] = (slot, job)
             while active:
                 done, _ = wait(active, return_when=FIRST_COMPLETED)
+                released_slots: list[int] = []
+                execution_failed = False
                 for future in done:
                     slot, job = active.pop(future)
                     try:
@@ -127,12 +131,27 @@ class Runner:
                             error=f"worker failed: {type(error).__name__}: {error}",
                         )
                     records.append(record)
-                    completed()
+                    tracker.update(record)
+                    released_slots.append(slot)
+                    execution_failed = execution_failed or bool(
+                        _execution_errors(record)
+                    )
+
+                if execution_failed and not aborted:
+                    aborted = True
+                    tracker.abort(len(jobs) - len(records) - len(active))
+                if aborted:
+                    continue
+
+                for slot in released_slots:
                     try:
                         next_job = next(iterator)
                     except StopIteration:
                         continue
-                    active[executors[slot].submit(execute_job, next_job)] = (slot, next_job)
+                    active[executors[slot].submit(execute_job, next_job)] = (
+                        slot,
+                        next_job,
+                    )
         finally:
             for executor in executors:
                 executor.shutdown(wait=True, cancel_futures=True)
@@ -146,20 +165,81 @@ class _Progress:
             try:
                 from tqdm import tqdm
 
-                self._bar = tqdm(total=total, desc="episodes", dynamic_ncols=True, position=0)
+                self._bar = tqdm(
+                    total=total, desc="episodes", dynamic_ncols=True, position=0
+                )
             except ImportError:
                 self._bar = None
         self._completed = 0
         self._total = total
+        self._metric_totals: dict[str, dict[str, float]] = {}
+        self._metric_counts: dict[str, dict[str, int]] = {}
 
-    def update(self) -> None:
+    def update(self, record: DomainRecord) -> None:
         self._completed += 1
+        errors = _execution_errors(record)
+        if record.result is not None and not errors:
+            totals = self._metric_totals.setdefault(record.bench_id, {})
+            counts = self._metric_counts.setdefault(record.bench_id, {})
+            for name, value in record.result.metrics.items():
+                totals[name] = totals.get(name, 0.0) + float(value)
+                counts[name] = counts.get(name, 0) + 1
         if self._bar is not None:
+            self._bar.set_postfix(self._metric_postfix(record.bench_id), refresh=False)
             self._bar.update(1)
+        for error in errors:
+            self._write(
+                f"ERROR [{self._completed}/{self._total}] "
+                f"bench={record.bench_id} episode={record.episode_id} "
+                f"worker={record.worker}: {error}"
+            )
+
+    def abort(self, not_started: int) -> None:
+        self._write(
+            "ERROR batch aborted after an execution failure; "
+            f"{max(0, not_started)} episodes were not started"
+        )
+
+    def _write(self, message: str) -> None:
+        if self._bar is not None:
+            self._bar.write(message, file=self._bar.fp)
+        else:
+            print(message, file=sys.stderr, flush=True)
+
+    def _metric_postfix(self, bench_id: str) -> dict[str, str]:
+        totals = self._metric_totals.get(bench_id, {})
+        counts = self._metric_counts.get(bench_id, {})
+        priority = {name: index for index, name in enumerate(_METRIC_PRIORITY)}
+        names = sorted(
+            totals, key=lambda name: (priority.get(name, len(priority)), name)
+        )
+        values = {
+            f"avg_{name}": f"{totals[name] / counts[name]:.3f}"
+            for name in names[:4]
+            if counts.get(name, 0)
+        }
+        if len(self._metric_totals) > 1:
+            return {"bench": bench_id, **values}
+        return values
 
     def close(self) -> None:
         if self._bar is not None:
             self._bar.close()
+
+
+def _execution_errors(record: DomainRecord) -> tuple[str, ...]:
+    errors: list[str] = []
+    if record.error:
+        errors.append(record.error)
+    if record.result is None:
+        if not errors:
+            errors.append("worker returned no Domain result")
+    else:
+        errors.extend(record.result.errors)
+    return tuple(errors)
+
+
+_METRIC_PRIORITY = ("sr", "spl", "ne", "os", "success", "path_efficiency")
 
 
 def _run_id(value: str | None) -> str:
