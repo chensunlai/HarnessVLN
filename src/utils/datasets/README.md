@@ -9,7 +9,7 @@ Each dataset family owns a third-level directory. Run a builder from the
 repository root after activating the required Python environment, for example:
 
 ```bash
-PYTHONPATH=src python -m utils.datasets.agent_vln.build --help
+PYTHONPATH=src python -m utils.datasets.agent_vln.pipeline --help
 ```
 
 Generated datasets belong under `data/` and are local artifacts; source code

@@ -65,7 +65,7 @@ SPL ambiguous.
 After activating the project Python environment:
 
 ```bash
-PYTHONPATH=src python -m utils.datasets.agent_vln.build \
+PYTHONPATH=src python -m utils.datasets.agent_vln.pipeline build \
   --source data/datasets/r2r/train/train.json \
   --scenes-root data/scene_datasets \
   --output data/generated/agent_vln_r2r_local_v1 \
@@ -95,7 +95,7 @@ arrival direction. Each route stores individual JPEGs, their poses and hashes,
 plus a contact sheet for inspection.
 
 ```bash
-PYTHONPATH=src python -m utils.datasets.agent_vln.render_paths \
+PYTHONPATH=src python -m utils.datasets.agent_vln.pipeline render \
   --input data/generated/agent_vln_r2r_local_v1 \
   --output data/generated/agent_vln_r2r_local_v2 \
   --scenes-root data/scene_datasets \
@@ -112,7 +112,7 @@ variables before running it; credentials are neither read from local config
 files nor written to the dataset.
 
 ```bash
-PYTHONPATH=src python -m utils.datasets.agent_vln.rewrite_instructions \
+PYTHONPATH=src python -m utils.datasets.agent_vln.pipeline rewrite \
   --input data/generated/agent_vln_r2r_local_v1 \
   --output data/generated/agent_vln_r2r_local_v2 \
   --model gpt-5.6-terra \
@@ -133,19 +133,19 @@ build a balanced reserve pool, render its missing routes, and materialize only
 non-conflicting candidates:
 
 ```bash
-PYTHONPATH=src python -m utils.datasets.agent_vln.extend_candidates \
+PYTHONPATH=src python -m utils.datasets.agent_vln.pipeline reserve \
   --base data/generated/agent_vln_r2r_local_v1 \
   --source data/datasets/r2r/train/train.json \
   --scenes-root data/scene_datasets \
   --output data/generated/agent_vln_r2r_local_candidates_v1
 
-PYTHONPATH=src python -m utils.datasets.agent_vln.render_paths \
+PYTHONPATH=src python -m utils.datasets.agent_vln.pipeline render \
   --input data/generated/agent_vln_r2r_local_candidates_v1 \
   --output data/generated/agent_vln_r2r_local_v2 \
   --scenes-root data/scene_datasets \
   --gpu-device-id 0
 
-PYTHONPATH=src python -m utils.datasets.agent_vln.rewrite_instructions \
+PYTHONPATH=src python -m utils.datasets.agent_vln.pipeline rewrite \
   --input data/generated/agent_vln_r2r_local_candidates_v1 \
   --output data/generated/agent_vln_r2r_local_v2 \
   --model gpt-5.6-terra \
