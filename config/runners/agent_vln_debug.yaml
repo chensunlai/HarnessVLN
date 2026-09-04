@@ -1,0 +1,7 @@
+runner:
+  domain: ../domains/agentic_navigation.yaml
+  benches:
+    - ../benches/agent_vln_debug.yaml
+  output_root: ../../runs/agent_vln_debug
+  workers:
+    count: 1

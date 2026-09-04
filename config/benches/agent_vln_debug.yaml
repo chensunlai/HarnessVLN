@@ -1,0 +1,8 @@
+bench:
+  id: agent_vln_debug
+  factory: benches.r2r_ce:R2RCEBenchmark
+  params:
+    root: data/generated/agent_vln_r2r_local_v2
+    split: debug
+  environment: ../envs/habitat/agent_vln.yaml
+  metric: ../metrics/r2r_ce.yaml
