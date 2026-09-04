@@ -1,0 +1,4 @@
+module:
+  name: agent_desc
+  factory: modules.agent_desc:AgentDescModule
+  params: {}
