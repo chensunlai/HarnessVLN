@@ -54,3 +54,52 @@ def test_arbitrary_modules_call_each_other_across_threads(tmp_path) -> None:
     )
     assert echo == {"value": "ready", "thread": "domain-echo"}
     assert not result.errors
+
+
+def test_module_build_failure_before_environment_start_returns(tmp_path) -> None:
+    episode = NavigationEpisode(
+        "build-failure",
+        {"type": "instruction", "instruction": "Exercise startup failure."},
+    )
+    spec = DomainSpec(
+        ModuleSpec("env", "envs.replay:ReplayEnvironment"),
+        ModuleSpec("metric", "metrics.navigation:NavigationMetric"),
+        (ModuleSpec("broken", "missing.module:MissingModule"),),
+        timeout_s=2,
+        shutdown_timeout_s=1,
+    )
+
+    result = DomainRuntime().run(
+        episode,
+        spec,
+        tmp_path,
+        domain_id="build-failure",
+    )
+
+    assert result.terminal.status == "failed"
+    assert "Domain startup failed" in result.terminal.reason
+    assert result.errors
+
+
+def test_environment_startup_uses_domain_timeout_not_shutdown_timeout(tmp_path) -> None:
+    episode = NavigationEpisode(
+        "slow-start",
+        {"type": "instruction", "instruction": "Wait for the environment."},
+        truth={"expert_actions": []},
+    )
+    spec = DomainSpec(
+        ModuleSpec(
+            "env",
+            "tests.fixtures.service_modules:SlowStartReplayEnvironment",
+            {"start_delay_s": 0.2},
+        ),
+        ModuleSpec("metric", "metrics.navigation:NavigationMetric"),
+        (ModuleSpec("expert", "modules.expert:ExpertTrajectoryModule"),),
+        timeout_s=1,
+        shutdown_timeout_s=0.1,
+    )
+
+    result = DomainRuntime().run(episode, spec, tmp_path, domain_id="slow-start")
+
+    assert result.terminal.status == "completed"
+    assert not result.errors

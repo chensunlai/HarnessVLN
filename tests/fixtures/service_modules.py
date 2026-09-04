@@ -1,8 +1,20 @@
 from __future__ import annotations
 
 import threading
+import time
 
 from domain.modules import Module
+from envs.replay import ReplayEnvironment
+
+
+class SlowStartReplayEnvironment(ReplayEnvironment):
+    def __init__(self, *, start_delay_s: float) -> None:
+        super().__init__()
+        self.start_delay_s = start_delay_s
+
+    def start(self) -> None:
+        time.sleep(self.start_delay_s)
+        super().start()
 
 
 class EchoService(Module):
@@ -22,6 +34,11 @@ class EchoService(Module):
         return {"value": value, "thread": threading.current_thread().name}
 
 
+class FailingModule(Module):
+    def run(self) -> None:
+        raise RuntimeError("backend unavailable")
+
+
 class ServiceDriver(Module):
     def run(self) -> None:
         result = self.context.register.call(
@@ -31,5 +48,9 @@ class ServiceDriver(Module):
         self.context.register.call(
             self.context.name,
             "env.stop",
-            {"status": "completed", "reason": "service call completed", "actor": self.context.name},
+            {
+                "status": "completed",
+                "reason": "service call completed",
+                "actor": self.context.name,
+            },
         )

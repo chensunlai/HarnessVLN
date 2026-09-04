@@ -83,6 +83,7 @@ class DomainRuntime:
         terminal: Terminal | None = None
         environment_result: dict[str, Any] = {}
         metrics: dict[str, float] = {}
+        deadline = time.monotonic() + spec.timeout_s
 
         try:
             modules.build(
@@ -103,9 +104,8 @@ class DomainRuntime:
             env_thread = _ModuleThread("env", modules.environment)
             threads["env"] = env_thread
             env_thread.start()
-            startup_deadline = time.monotonic() + min(spec.timeout_s, spec.shutdown_timeout_s)
             while not modules.environment.wait_ready(0.02):
-                if env_thread.error is not None or time.monotonic() >= startup_deadline:
+                if env_thread.error is not None or time.monotonic() >= deadline:
                     break
             if env_thread.error is not None:
                 raise env_thread.error
@@ -119,7 +119,6 @@ class DomainRuntime:
                 threads[name] = thread
                 thread.start()
 
-            deadline = time.monotonic() + spec.timeout_s
             while terminal is None:
                 terminal = modules.environment.wait_terminal(0.02)
                 failed = next(
@@ -140,11 +139,11 @@ class DomainRuntime:
                     )
         except BaseException as error:
             errors.append(f"runtime: {type(error).__name__}: {error}")
-            terminal = terminal or self._request_stop(
-                register,
-                "failed",
-                f"Domain startup failed: {type(error).__name__}: {error}",
-                "domain",
+            reason = f"Domain startup failed: {type(error).__name__}: {error}"
+            terminal = terminal or (
+                self._request_stop(register, "failed", reason, "domain")
+                if "env" in threads
+                else Terminal("failed", reason, "domain")
             )
         finally:
             register.close_writes()
