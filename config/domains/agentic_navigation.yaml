@@ -9,5 +9,5 @@ domain:
     python: python
     command_timeout_s: 30
     max_output_chars: 200000
-  timeout_s: 30
-  shutdown_timeout_s: 5
+  timeout_s: 600
+  shutdown_timeout_s: 10

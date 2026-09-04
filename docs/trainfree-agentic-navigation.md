@@ -22,13 +22,13 @@
 
 ## 模型设计
 
-四个模块不应复制四套 Agent Loop。更合适的实现是一个极小的 `ChildAgentLoop` 内核，加四个独立能力模块；每个模块只定义自己的 system prompt、输入整理、可用工具、上下文策略和结果校验。模型后端分别可配置，基础版本可共用同一个视觉语言模型。
+四个模块不应长期复制四套 Agent Loop，但基础版本也不提前引入公共内核。当前只有 `agent_vln` 实现真实循环，它在模块内部直接使用 Responses 原生 function calling；等第二个运动模块出现相同代码后，再把稳定的请求、重试和轨迹记录部分抽成极小公共内核。每个能力模块始终保留自己的 prompt、输入整理、工具、上下文策略和结果校验。
 
 ```text
 UpperAgent（完整任务上下文）
   -> 四个原生 function tools
       -> 能力模块（独立 prompt / context / tools / guards）
-          -> 共享 ChildAgentLoop -> Model
+          -> 模块内 Agent Loop -> Model
           -> Env 或局部导航工具
       <- 统一的局部结果与证据
 ```
@@ -47,3 +47,17 @@ UpperAgent（完整任务上下文）
 | `agent_desc` | 当前单帧或多视图观察，以及上层给出的关注目标 | 生成带证据引用的结构化局部描述。通常一次模型调用即可；不移动、不制定完整任务，也不把未观察区域写成事实。 |
 
 四个模块采用各自收窄的输入，但返回统一结果：`status`、`reason`、`evidence`，以及 Env 可提供时的 `final_pose`。`completed` 和 `refused` 必须经过模块自己的 guard 校验，不能只相信模型文本判断。
+
+## 当前 `agent_vln` 基线
+
+`agent_vln.run(instruction)` 自己调用 `env.observe` 获取 RGB-D 和位姿，模型每轮必须通过 Responses 原生工具调用选择 `agent_vln_act` 或 `agent_vln_finish`。前者一次接受 1-4 个 `forward / turn_left / turn_right` 原子动作，并逐个调用 `env.step`；后者只结束局部任务，不调用 `env.stop`。`master_agent` 收到结果后才决定 episode 状态。
+
+图像上下文由均匀采样的长期轨迹帧、连续近期帧和当前帧组成；模型在每次动作调用中同步维护已完成指令片段、当前位置和下一步，作为长期文本总结。模块记录 `trace.jsonl`、`history.json` 和 `result.json`，但不把图片的 base64 写入轨迹。到达需要两次无移动确认，动作预算耗尽时只能完成或拒绝；同一位置转满一圈仍没有可执行方向则直接拒绝，避免继续空转。
+
+最小真实调试入口是：
+
+```bash
+python -m cli run --runner config/runners/agent_vln_debug.yaml
+```
+
+该 Runner 使用 Habitat 与 `data/generated/agent_vln_r2r_local_v2`，模型、推理强度、图像记忆和调用上限均在 `config/modules/agent_vln.yaml` 中配置。API 地址与密钥仅由启动进程环境提供。
